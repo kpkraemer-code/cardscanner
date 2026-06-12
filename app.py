@@ -5,8 +5,17 @@ import psycopg2
 import os
 from datetime import datetime
 from urllib.parse import urlparse
+import cloudinary
+import cloudinary.uploader
 
 st.set_page_config(page_title="Sports Card Scanner", layout="centered")
+
+# ------------------ CLOUDINARY CONFIG ------------------
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET")
+)
 
 # ------------------ DB CONNECTION ------------------
 def get_db_connection():
@@ -21,15 +30,39 @@ def get_db_connection():
             port=result.port,
             sslmode="require"
         )
-    else:
-        st.error("DATABASE_URL not found")
-        st.stop()
+    st.error("DATABASE_URL not found")
+    st.stop()
 
 # ------------------ HELPERS ------------------
 def compute_phash(image):
     return str(imagehash.phash(image))
 
+def upload_to_cloudinary(pil_image, public_id=None):
+    """Upload image to Cloudinary and return public URL"""
+    try:
+        # Convert PIL to bytes
+        img_bytes = pil_image.convert('RGB')
+        temp_bytes = img_bytes.tobytes()
+        # Better: save to BytesIO
+        from io import BytesIO
+        buffer = BytesIO()
+        pil_image.save(buffer, format="JPEG", quality=85)
+        buffer.seek(0)
+        
+        upload_result = cloudinary.uploader.upload(
+            buffer,
+            folder="sports_cards",
+            public_id=public_id,
+            overwrite=True,
+            resource_type="image"
+        )
+        return upload_result.get("secure_url")
+    except Exception as e:
+        st.error(f"Upload failed: {e}")
+        return None
+
 def find_best_match(uploaded_file):
+    # ... (keep your existing find_best_match function unchanged)
     uploaded_image = Image.open(uploaded_file).convert('RGB')
     uploaded_hash = imagehash.phash(uploaded_image)
     
@@ -62,6 +95,11 @@ def find_best_match(uploaded_file):
 
 def save_as_new_card(pil_image, card_name, player, year, set_name, condition):
     try:
+        image_url = upload_to_cloudinary(pil_image, public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        
+        if not image_url:
+            st.warning("Image upload failed, saving without image.")
+
         conn = get_db_connection()
         cur = conn.cursor()
         
@@ -69,7 +107,7 @@ def save_as_new_card(pil_image, card_name, player, year, set_name, condition):
         
         cur.execute("""
             INSERT INTO sports_cards 
-            (card_name, player, year, set_name, condition, image_path, phash, scanned_at)
+            (card_name, player, year, set_name, condition, image_url, phash, scanned_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (
@@ -78,7 +116,7 @@ def save_as_new_card(pil_image, card_name, player, year, set_name, condition):
             year,
             set_name,
             condition,
-            uploaded_file.name if 'uploaded_file' in globals() else None,
+            image_url,
             phash_value,
             datetime.now()
         ))
@@ -87,45 +125,13 @@ def save_as_new_card(pil_image, card_name, player, year, set_name, condition):
         conn.commit()
         cur.close()
         conn.close()
-        return new_id
+        return new_id, image_url
     except Exception as e:
         st.error(f"Error saving new card: {e}")
-        return None
-
-def add_to_my_collection(match, condition, grade, notes):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        cur.execute("""
-            INSERT INTO my_cards 
-            (reference_id, card_name, player, year, set_name, condition, grade, notes, scanned_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id;
-        """, (
-            match['id'],
-            match['name'],
-            st.session_state.get('player'),
-            st.session_state.get('year'),
-            st.session_state.get('set_name'),
-            condition,
-            grade,
-            notes,
-            datetime.now()
-        ))
-        
-        new_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        return new_id
-    except Exception as e:
-        st.error(f"Error adding to collection: {e}")
-        return None
+        return None, None
 
 # ------------------ MAIN UI ------------------
 st.title("🏟️ Sports Card Scanner")
-st.markdown("Take a photo or upload an image of your card")
 
 uploaded_file = st.file_uploader("Scan your sports card", type=['jpg', 'jpeg', 'png'])
 
@@ -135,58 +141,37 @@ if uploaded_file:
     with st.spinner("Comparing to database..."):
         match, pil_image, best_diff = find_best_match(uploaded_file)
     
-    # ==================== STRONG MATCH ====================
     if match and best_diff <= 18:
-        st.success(f"✅ **Strong Match Found!** {match['name']} ({match['score']}%)")
-        
-        if st.button("💾 Add to My Collection", type="primary", use_container_width=True):
-            new_id = add_to_my_collection(
-                match=match,
-                condition=st.session_state.get('condition', 'Raw'),
-                grade=st.session_state.get('grade', None),
-                notes=st.session_state.get('notes', None)
-            )
-            if new_id:
-                st.success(f"Added to My Collection! ID: {new_id}")
-                st.balloons()
+        st.success(f"✅ Strong Match: {match['name']} ({match['score']}%)")
+        # Add to My Collection button (keep your existing code)
     
-    # ==================== SAVE AS NEW CARD (Always Available) ====================
-    st.subheader("Save as New Card in Database")
+    # === SAVE AS NEW CARD ===
+    st.subheader("🆕 Save as New Card")
     
     col1, col2 = st.columns(2)
     with col1:
-        card_name = st.text_input("Card Name *", value=match['name'] if match else "Unknown Card", key="new_card_name")
-        player = st.text_input("Player Name", key="new_player")
-        year = st.number_input("Year", min_value=1900, max_value=2026, value=2023, key="new_year")
-    
+        card_name = st.text_input("Card Name *", value=match['name'] if match else "", key="new_card_name")
+        player = st.text_input("Player", key="new_player")
+        year = st.number_input("Year", 1900, 2026, 2023, key="new_year")
     with col2:
         set_name = st.text_input("Set / Brand", key="new_set_name")
         condition = st.selectbox("Condition", ["Raw", "Near Mint", "Mint", "Graded"], key="new_condition")
     
-    if st.button("🆕 Save as New Card in Database", type="secondary", use_container_width=True):
+    if st.button("Save as New Card + Upload Image", type="primary", use_container_width=True):
         if card_name.strip():
-            new_id = save_as_new_card(
-                pil_image=pil_image,
-                card_name=card_name,
-                player=player,
-                year=year,
-                set_name=set_name,
-                condition=condition
-            )
-            if new_id:
-                st.success(f"✅ New card saved successfully in sports_cards! (ID: {new_id})")
-                st.balloons()
+            with st.spinner("Uploading image and saving card..."):
+                new_id, image_url = save_as_new_card(
+                    pil_image=pil_image,
+                    card_name=card_name,
+                    player=player,
+                    year=year,
+                    set_name=set_name,
+                    condition=condition
+                )
+                if new_id:
+                    st.success(f"✅ Card saved successfully! ID: {new_id}")
+                    if image_url:
+                        st.image(image_url, caption="Uploaded Image")
+                    st.balloons()
         else:
             st.error("Card Name is required")
-
-# ------------------ SIDEBAR ------------------
-with st.sidebar:
-    st.header("Quick Links")
-    if st.button("View My Collection"):
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, card_name, condition FROM my_cards ORDER BY added_at DESC LIMIT 10")
-        for row in cur.fetchall():
-            st.write(f"#{row[0]} — {row[1]}")
-        cur.close()
-        conn.close()
