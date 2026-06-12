@@ -38,7 +38,7 @@ def compute_phash(image):
     return str(imagehash.phash(image))
 
 def upload_to_cloudinary(pil_image, public_id=None):
-    """Upload image using UNSIGNED upload (no signature needed)"""
+    """Upload image to Cloudinary using unsigned upload"""
     try:
         from io import BytesIO
         
@@ -48,10 +48,10 @@ def upload_to_cloudinary(pil_image, public_id=None):
 
         upload_result = cloudinary.uploader.unsigned_upload(
             buffer,
-            upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),   # <-- Important
+            upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),   # Must be set
             folder="sports_cards",
             public_id=public_id,
-            overwrite=True,
+            # Remove overwrite parameter for unsigned uploads
             resource_type="image"
         )
         
@@ -94,11 +94,17 @@ def find_best_match(uploaded_file):
 
 def save_as_new_card(pil_image, card_name, player, year, set_name, condition):
     try:
-        with st.spinner("Uploading image to Cloudinary..."):
-            image_url = upload_to_cloudinary(
-                pil_image, 
-                public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            )
+        image_url = None
+        
+        # Try to upload image
+        if os.getenv("CLOUDINARY_UPLOAD_PRESET"):
+            with st.spinner("Uploading image to Cloudinary..."):
+                image_url = upload_to_cloudinary(
+                    pil_image, 
+                    public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                )
+        else:
+            st.warning("Cloudinary upload preset not configured. Saving card without image.")
         
         conn = get_db_connection()
         cur = conn.cursor()
