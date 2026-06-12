@@ -42,37 +42,60 @@ def compute_phash(image):
     return str(imagehash.phash(image))
 
 def find_best_match(uploaded_file):
-    """Compare uploaded image to database using pHash"""
+    """Improved matching with debugging info"""
     uploaded_image = Image.open(uploaded_file).convert('RGB')
     uploaded_hash = imagehash.phash(uploaded_image)
+    uploaded_hash_str = str(uploaded_hash)
+    
+    st.info(f"Uploaded pHash: {uploaded_hash_str}")
     
     conn = get_db_connection()
     cur = conn.cursor()
     
-    cur.execute("SELECT id, card_name, image_path, phash FROM sports_cards")
+    cur.execute("SELECT id, card_name, phash FROM sports_cards WHERE phash IS NOT NULL")
     rows = cur.fetchall()
     
     best_match = None
-    best_score = float('inf')
+    best_score = 0
+    best_diff = 999
+    
+    st.write(f"Comparing against {len(rows)} cards in database...")
     
     for row in rows:
         try:
-            db_hash = imagehash.hex_to_hash(row[3])
+            db_hash = imagehash.hex_to_hash(row[2])
             diff = uploaded_hash - db_hash
-            if diff < best_score and diff <= 12:  # Adjust threshold
-                best_score = diff
+            
+            score = round((1 - diff / 64.0) * 100, 1)  # percentage similarity
+            
+            if diff < best_diff:
+                best_diff = diff
+                best_score = score
                 best_match = {
                     'id': row[0],
                     'name': row[1],
-                    'score': round((1 - diff / 64.0) * 100, 1)
+                    'diff': diff,
+                    'score': score
                 }
         except:
             continue
     
     cur.close()
     conn.close()
-    return best_match, uploaded_image
-
+    
+    # Show debug info
+    if best_match:
+        st.write(f"**Best match found** — Hamming distance: {best_match['diff']} | Score: {best_match['score']}%")
+        
+        if best_match['diff'] <= 18:   # Much more lenient threshold
+            st.success(f"✅ Strong Match: {best_match['name']} ({best_match['score']}%)")
+            return best_match, uploaded_image
+        else:
+            st.warning(f"Closest card is {best_match['name']} but difference too high ({best_match['diff']})")
+            return None, uploaded_image
+    else:
+        st.warning("No cards with pHash found in database")
+        return None, uploaded_image
 def save_to_database(match, uploaded_image, original_filename):
     try:
         conn = get_db_connection()
