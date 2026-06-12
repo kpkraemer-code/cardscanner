@@ -94,11 +94,12 @@ def find_best_match(uploaded_file):
 
 def save_as_new_card(pil_image, card_name, player, year, set_name, condition):
     try:
-        image_url = upload_to_cloudinary(pil_image, public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        with st.spinner("Uploading image to Cloudinary..."):
+            image_url = upload_to_cloudinary(
+                pil_image, 
+                public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
         
-        if not image_url:
-            st.warning("Image upload failed, saving without image.")
-
         conn = get_db_connection()
         cur = conn.cursor()
         
@@ -124,9 +125,10 @@ def save_as_new_card(pil_image, card_name, player, year, set_name, condition):
         conn.commit()
         cur.close()
         conn.close()
+        
         return new_id, image_url
     except Exception as e:
-        st.error(f"Error saving new card: {e}")
+        st.error(f"Error saving card: {e}")
         return None, None
 
 # ------------------ MAIN UI ------------------
