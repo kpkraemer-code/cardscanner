@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 import io
 import numpy as np
+from urllib.parse import urlparse
 
 # ------------------ CONFIG ------------------
 st.set_page_config(page_title="Sports Card Scanner", layout="centered")
@@ -20,7 +21,22 @@ DB_CONFIG = {
 
 # ------------------ HELPERS ------------------
 def get_db_connection():
-    return psycopg2.connect(**DB_CONFIG)
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        st.error("DATABASE_URL environment variable is missing!")
+        st.stop()
+    
+    # Parse and connect
+    result = urlparse(database_url)
+    conn = psycopg2.connect(
+        dbname=result.path[1:],
+        user=result.username,
+        password=result.password,
+        host=result.hostname,
+        port=result.port,
+        sslmode="require"
+    )
+    return conn
 
 def compute_phash(image):
     return str(imagehash.phash(image))
