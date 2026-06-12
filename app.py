@@ -96,8 +96,8 @@ def add_to_my_collection(match, condition, grade, notes, image_url):
         cur.execute("""
             INSERT INTO my_cards 
             (reference_id, card_name, player, year, set_name, condition, grade, notes, 
-             image_url, scanned_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             scanned_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (
             match['id'],
