@@ -7,6 +7,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 import cloudinary
 import cloudinary.uploader
+from io import BytesIO
 
 st.set_page_config(page_title="Sports Card Scanner", layout="centered")
 
@@ -38,30 +39,25 @@ def compute_phash(image):
     return str(imagehash.phash(image))
 
 def upload_to_cloudinary(pil_image, public_id=None):
-    """Upload image to Cloudinary using unsigned upload"""
+    """Upload image using unsigned upload"""
     try:
-        from io import BytesIO
-        
         buffer = BytesIO()
         pil_image.save(buffer, format="JPEG", quality=85, optimize=True)
         buffer.seek(0)
 
         upload_result = cloudinary.uploader.unsigned_upload(
             buffer,
-            upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),   # Must be set
+            upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),
             folder="sports_cards",
             public_id=public_id,
-            # Remove overwrite parameter for unsigned uploads
             resource_type="image"
         )
-        
         return upload_result.get("secure_url")
     except Exception as e:
         st.error(f"Cloudinary upload failed: {str(e)}")
         return None
 
 def find_best_match(uploaded_file):
-    # ... (keep your existing find_best_match function unchanged)
     uploaded_image = Image.open(uploaded_file).convert('RGB')
     uploaded_hash = imagehash.phash(uploaded_image)
     
@@ -92,93 +88,23 @@ def find_best_match(uploaded_file):
 
     return best_match, uploaded_image, best_diff
 
-def save_as_new_card(pil_image, card_name, player, year, set_name, condition):
+def add_to_my_collection(match, condition, grade, notes, image_url):
     try:
-        image_url = None
-        
-        # Try to upload image
-        if os.getenv("CLOUDINARY_UPLOAD_PRESET"):
-            with st.spinner("Uploading image to Cloudinary..."):
-                image_url = upload_to_cloudinary(
-                    pil_image, 
-                    public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                )
-        else:
-            st.warning("Cloudinary upload preset not configured. Saving card without image.")
-        
         conn = get_db_connection()
         cur = conn.cursor()
         
-        phash_value = compute_phash(pil_image)
-        
         cur.execute("""
-            INSERT INTO sports_cards 
-            (card_name, player, year, set_name, condition, image_url, phash, scanned_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO my_cards 
+            (reference_id, card_name, player, year, set_name, condition, grade, notes, 
+             image_url, scanned_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (
-            card_name,
-            player,
-            year,
-            set_name,
+            match['id'],
+            match['name'],
+            st.session_state.get('player'),
+            st.session_state.get('year'),
+            st.session_state.get('set_name'),
             condition,
-            image_url,
-            phash_value,
-            datetime.now()
-        ))
-        
-        new_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        return new_id, image_url
-    except Exception as e:
-        st.error(f"Error saving card: {e}")
-        return None, None
-
-# ------------------ MAIN UI ------------------
-st.title("🏟️ Sports Card Scanner")
-
-uploaded_file = st.file_uploader("Scan your sports card", type=['jpg', 'jpeg', 'png'])
-
-if uploaded_file:
-    st.image(uploaded_file, caption="Scanned Card", use_column_width=True)
-    
-    with st.spinner("Comparing to database..."):
-        match, pil_image, best_diff = find_best_match(uploaded_file)
-    
-    if match and best_diff <= 18:
-        st.success(f"✅ Strong Match: {match['name']} ({match['score']}%)")
-        # Add to My Collection button (keep your existing code)
-    
-    # === SAVE AS NEW CARD ===
-    st.subheader("🆕 Save as New Card")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        card_name = st.text_input("Card Name *", value=match['name'] if match else "", key="new_card_name")
-        player = st.text_input("Player", key="new_player")
-        year = st.number_input("Year", 1900, 2026, 2023, key="new_year")
-    with col2:
-        set_name = st.text_input("Set / Brand", key="new_set_name")
-        condition = st.selectbox("Condition", ["Raw", "Near Mint", "Mint", "Graded"], key="new_condition")
-    
-    if st.button("Save as New Card + Upload Image", type="primary", use_container_width=True):
-        if card_name.strip():
-            with st.spinner("Uploading image and saving card..."):
-                new_id, image_url = save_as_new_card(
-                    pil_image=pil_image,
-                    card_name=card_name,
-                    player=player,
-                    year=year,
-                    set_name=set_name,
-                    condition=condition
-                )
-                if new_id:
-                    st.success(f"✅ Card saved successfully! ID: {new_id}")
-                    if image_url:
-                        st.image(image_url, caption="Uploaded Image")
-                    st.balloons()
-        else:
-            st.error("Card Name is required")
+            grade,
+           
