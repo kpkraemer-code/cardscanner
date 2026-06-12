@@ -38,27 +38,26 @@ def compute_phash(image):
     return str(imagehash.phash(image))
 
 def upload_to_cloudinary(pil_image, public_id=None):
-    """Upload image to Cloudinary and return public URL"""
+    """Upload image using UNSIGNED upload (no signature needed)"""
     try:
-        # Convert PIL to bytes
-        img_bytes = pil_image.convert('RGB')
-        temp_bytes = img_bytes.tobytes()
-        # Better: save to BytesIO
         from io import BytesIO
-        buffer = BytesIO()
-        pil_image.save(buffer, format="JPEG", quality=85)
-        buffer.seek(0)
         
-        upload_result = cloudinary.uploader.upload(
+        buffer = BytesIO()
+        pil_image.save(buffer, format="JPEG", quality=85, optimize=True)
+        buffer.seek(0)
+
+        upload_result = cloudinary.uploader.unsigned_upload(
             buffer,
+            upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),   # <-- Important
             folder="sports_cards",
             public_id=public_id,
             overwrite=True,
             resource_type="image"
         )
+        
         return upload_result.get("secure_url")
     except Exception as e:
-        st.error(f"Upload failed: {e}")
+        st.error(f"Cloudinary upload failed: {str(e)}")
         return None
 
 def find_best_match(uploaded_file):
