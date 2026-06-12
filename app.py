@@ -4,126 +4,82 @@ import imagehash
 import psycopg2
 import os
 from datetime import datetime
-import io
-import numpy as np
 from urllib.parse import urlparse
 
-# ------------------ CONFIG ------------------
 st.set_page_config(page_title="Sports Card Scanner", layout="centered")
 
-DB_CONFIG = {
-    'dbname': os.getenv('DB_NAME'),
-    'user': os.getenv('DB_USER'),
-    'password': os.getenv('DB_PASSWORD'),
-    'host': os.getenv('DB_HOST'),
-    'port': os.getenv('DB_PORT', '5432')
-}
-
-# ------------------ HELPERS ------------------
+# ------------------ DB CONNECTION ------------------
 def get_db_connection():
     database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        st.error("DATABASE_URL environment variable is missing!")
+    if database_url:
+        result = urlparse(database_url)
+        return psycopg2.connect(
+            dbname=result.path[1:],
+            user=result.username,
+            password=result.password,
+            host=result.hostname,
+            port=result.port,
+            sslmode="require"
+        )
+    else:
+        st.error("DATABASE_URL not found")
         st.stop()
-    
-    # Parse and connect
-    result = urlparse(database_url)
-    conn = psycopg2.connect(
-        dbname=result.path[1:],
-        user=result.username,
-        password=result.password,
-        host=result.hostname,
-        port=result.port,
-        sslmode="require"
-    )
-    return conn
 
+# ------------------ HELPERS ------------------
 def compute_phash(image):
     return str(imagehash.phash(image))
 
 def find_best_match(uploaded_file):
-    """Improved matching with debugging info"""
     uploaded_image = Image.open(uploaded_file).convert('RGB')
     uploaded_hash = imagehash.phash(uploaded_image)
-    uploaded_hash_str = str(uploaded_hash)
-    
-    st.info(f"Uploaded pHash: {uploaded_hash_str}")
     
     conn = get_db_connection()
     cur = conn.cursor()
-    
     cur.execute("SELECT id, card_name, phash FROM sports_cards WHERE phash IS NOT NULL")
     rows = cur.fetchall()
-    
+    cur.close()
+    conn.close()
+
     best_match = None
-    best_score = 0
     best_diff = 999
-    
-    st.write(f"Comparing against {len(rows)} cards in database...")
-    
+
     for row in rows:
         try:
             db_hash = imagehash.hex_to_hash(row[2])
             diff = uploaded_hash - db_hash
-            
-            score = round((1 - diff / 64.0) * 100, 1)  # percentage similarity
-            
             if diff < best_diff:
                 best_diff = diff
-                best_score = score
                 best_match = {
                     'id': row[0],
                     'name': row[1],
                     'diff': diff,
-                    'score': score
+                    'score': round((1 - diff / 64.0) * 100, 1)
                 }
         except:
             continue
-    
-    cur.close()
-    conn.close()
-    
-    # Show debug info
-    if best_match:
-        st.write(f"**Best match found** — Hamming distance: {best_match['diff']} | Score: {best_match['score']}%")
-        
-        if best_match['diff'] <= 18:   # Much more lenient threshold
-            st.success(f"✅ Strong Match: {best_match['name']} ({best_match['score']}%)")
-            return best_match, uploaded_image
-        else:
-            st.warning(f"Closest card is {best_match['name']} but difference too high ({best_match['diff']})")
-            return None, uploaded_image
-    else:
-        st.warning("No cards with pHash found in database")
-        return None, uploaded_image
-def save_to_database(match, uploaded_image, original_filename):
+
+    return best_match, uploaded_image, best_diff
+
+def add_to_my_collection(match, uploaded_image, condition="Raw", grade=None, notes=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Save image to a public folder or use external storage (e.g. Railway volume / Supabase)
-        image_bytes = io.BytesIO()
-        uploaded_image.save(image_bytes, format='JPEG')
-        image_bytes = image_bytes.getvalue()
-        
-        # For simplicity, store as base64 or save to filesystem + path
-        # Recommendation: Use a cloud bucket later
-        
         cur.execute("""
-            INSERT INTO sports_cards 
-            (card_name, player, year, set_name, condition, image_path, scanned_at, reference_id, phash)
+            INSERT INTO my_cards 
+            (reference_id, card_name, player, year, set_name, condition, grade, notes, scanned_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (
-            match.get('name', 'Unknown Card'),
-            st.session_state.get('player', 'Unknown'),
+            match['id'],
+            match['name'],
+            st.session_state.get('player', None),
             st.session_state.get('year', None),
-            st.session_state.get('set_name', 'Unknown'),
-            st.session_state.get('condition', 'Raw'),
-            original_filename,
-            datetime.now(),
-            match.get('id'),
-            compute_phash(uploaded_image)
+            st.session_state.get('set_name', None),
+            condition,
+            grade,
+            notes,
+            datetime.now()
         ))
         
         new_id = cur.fetchone()[0]
@@ -132,58 +88,60 @@ def save_to_database(match, uploaded_image, original_filename):
         conn.close()
         return new_id
     except Exception as e:
-        st.error(f"Database error: {e}")
+        st.error(f"Failed to add to collection: {e}")
         return None
 
-# ------------------ UI ------------------
+# ------------------ MAIN UI ------------------
 st.title("🏟️ Sports Card Scanner")
-st.markdown("Take a photo or upload an image of your card")
+st.markdown("Take a photo or upload an image")
 
-uploaded_file = st.file_uploader(
-    "Scan your sports card", 
-    type=['jpg', 'jpeg', 'png'],
-    help="On iPhone, tap the camera icon to take a new photo"
-)
+uploaded_file = st.file_uploader("Scan your sports card", type=['jpg', 'jpeg', 'png'])
 
 if uploaded_file:
-    col1, col2 = st.columns(2)
+    st.image(uploaded_file, caption="Scanned Card", use_column_width=True)
     
-    with col1:
-        st.image(uploaded_file, caption="Captured Image", use_column_width=True)
+    with st.spinner("Comparing to database..."):
+        match, pil_image, best_diff = find_best_match(uploaded_file)
     
-    with col2:
-        st.subheader("Processing...")
-        with st.spinner("Comparing to database..."):
-            match, pil_image = find_best_match(uploaded_file)
-        
-        if match and match['score'] > 75:
-            st.success(f"**Match Found!** {match['name']}")
-            st.metric("Confidence", f"{match['score']}%")
-        else:
-            st.warning("No strong match found. You can still save it as new.")
-            match = {'name': 'New Card'}
+    if match and best_diff <= 18:   # Strong match
+        st.success(f"✅ **Strong Match Found!** {match['name']} ({match['score']}%)")
         
         # Manual fields
-        st.text_input("Player Name", key="player")
-        st.number_input("Year", min_value=1900, max_value=2026, value=2023, key="year")
-        st.text_input("Set / Brand", value="Unknown", key="set_name")
-        st.selectbox("Condition", ["Raw", "Near Mint", "Mint", "Graded"], key="condition")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.text_input("Player", key="player")
+            st.number_input("Year", min_value=1900, max_value=2026, value=2023, key="year")
+        with col2:
+            st.text_input("Set / Brand", key="set_name")
+            st.selectbox("Condition", ["Raw", "Near Mint", "Mint", "Graded"], key="condition")
         
-        if st.button("💾 Save to Collection", type="primary"):
-            new_id = save_to_database(match, pil_image, uploaded_file.name)
+        grade = st.text_input("Grade (e.g. PSA 10)", key="grade")
+        notes = st.text_area("Notes / Comments", key="notes")
+        
+        if st.button("💾 Add to My Collection", type="primary", use_container_width=True):
+            new_id = add_to_my_collection(
+                match=match,
+                uploaded_image=pil_image,
+                condition=st.session_state.condition,
+                grade=grade,
+                notes=notes
+            )
             if new_id:
-                st.success(f"Card saved successfully! Record ID: {new_id}")
+                st.success(f"✅ Card successfully added to **My Collection**! (ID: {new_id})")
                 st.balloons()
+    
+    else:
+        st.warning("No strong match found. You can still add it manually as a new card.")
+        # You can extend this section later for manual entry without match
 
-# Sidebar info
+# ------------------ SIDEBAR ------------------
 with st.sidebar:
-    st.header("Database")
-    st.info(f"Connected to Railway Postgres")
-    if st.button("View All Cards"):
+    st.header("My Collection")
+    if st.button("View My Cards"):
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT id, card_name, scanned_at FROM sports_cards ORDER BY scanned_at DESC LIMIT 20")
+        cur.execute("SELECT id, card_name, condition, added_at FROM my_cards ORDER BY added_at DESC LIMIT 15")
         for row in cur.fetchall():
-            st.write(f"#{row[0]} — {row[1]}")
+            st.write(f"#{row[0]} — {row[1]} ({row[2]})")
         cur.close()
         conn.close()
