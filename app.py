@@ -108,7 +108,6 @@ def add_to_my_collection(match, condition, grade, notes, image_url):
             condition,
             grade,
             notes,
-            image_url,
             datetime.now()
         ))
         
