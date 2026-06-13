@@ -75,6 +75,7 @@ def upload_to_cloudinary(pil_image, public_id=None):
         return None
 
 def find_best_match(uploaded_file):
+    """Improved matching with debug info"""
     uploaded_image = Image.open(uploaded_file).convert('RGB')
     uploaded_hash = imagehash.phash(uploaded_image)
     
@@ -85,20 +86,29 @@ def find_best_match(uploaded_file):
     cur.close()
     conn.close()
 
+    st.info(f"Comparing against **{len(rows)}** cards in database...")
+
     best_match = None
     best_diff = 999
+
     for row in rows:
         try:
             db_hash = imagehash.hex_to_hash(row[2])
             diff = uploaded_hash - db_hash
             if diff < best_diff:
                 best_diff = diff
-                best_match = {'id': row[0], 'name': row[1], 'diff': diff, 'score': round((1 - diff / 64.0) * 100, 1)}
+                best_match = {
+                    'id': row[0],
+                    'name': row[1],
+                    'diff': diff,
+                    'score': round((1 - diff / 64.0) * 100, 1)
+                }
         except:
             continue
+
     return best_match, uploaded_image, best_diff
 
-# ===================== SAVE FUNCTIONS =====================
+# ------------------ SAVE FUNCTIONS ------------------
 def add_to_my_collection(match, player, year, set_name, grade, notes):
     try:
         conn = get_db_connection()
@@ -145,7 +155,6 @@ st.title("🏟️ Sports Card Scanner")
 
 uploaded_file = st.file_uploader("Take photo or upload card image", type=['jpg', 'jpeg', 'png'])
 
-# Initialize session state
 if 'processed' not in st.session_state:
     st.session_state.processed = False
 if 'match' not in st.session_state:
@@ -159,7 +168,7 @@ if uploaded_file:
     st.image(uploaded_file, caption="Scanned Card", width=380)
 
     if st.button("🔍 Process Image", type="primary", use_container_width=True):
-        with st.spinner("Analyzing card..."):
+        with st.spinner("Analyzing card and searching for matches..."):
             match, pil_image, best_diff = find_best_match(uploaded_file)
             
             st.session_state.match = match
@@ -167,12 +176,11 @@ if uploaded_file:
             st.session_state.best_diff = best_diff
             st.session_state.processed = True
 
-    # Show forms only if image has been processed
+    # Show results only after processing
     if st.session_state.processed and st.session_state.pil_image:
         
-        # Strong Match Section
         if st.session_state.match and st.session_state.best_diff <= 18:
-            st.success(f"✅ Strong Match Found: {st.session_state.match['name']} ({st.session_state.match['score']}%)")
+            st.success(f"✅ **Strong Match Found!** {st.session_state.match['name']} ({st.session_state.match['score']}%)")
             
             col1, col2 = st.columns(2)
             with col1:
@@ -189,8 +197,14 @@ if uploaded_file:
                 if new_id:
                     st.success(f"✅ Added to My Collection! ID: {new_id}")
                     st.balloons()
+        
+        else:
+            if st.session_state.match:
+                st.warning(f"Closest match: {st.session_state.match['name']} ({st.session_state.match['score']}%) — Difference too high")
+            else:
+                st.info("No matches found in database.")
 
-        # Save as New Card Section
+        # === SAVE AS NEW CARD (Always available) ===
         st.subheader("🆕 Save as New Card")
         col1, col2 = st.columns(2)
         with col1:
@@ -200,7 +214,7 @@ if uploaded_file:
             brand_new = st.selectbox("Set / Brand", get_brands(), key="new_set")
         
         if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True, key="btn_save_new"):
-            with st.spinner("Uploading image and saving card..."):
+            with st.spinner("Uploading image and saving..."):
                 new_id, image_url = save_as_new_card(st.session_state.pil_image, player_new, year_new, brand_new)
                 if new_id:
                     st.success(f"✅ New card saved successfully! ID: {new_id}")
