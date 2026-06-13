@@ -65,17 +65,13 @@ def upload_to_cloudinary(pil_image, public_id=None):
         buffer = BytesIO()
         pil_image.save(buffer, format="JPEG", quality=85, optimize=True)
         buffer.seek(0)
-
         upload_result = cloudinary.uploader.unsigned_upload(
-            buffer,
-            upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),
-            folder="sports_cards",
-            public_id=public_id,
-            resource_type="image"
+            buffer, upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),
+            folder="sports_cards", public_id=public_id, resource_type="image"
         )
         return upload_result.get("secure_url")
     except Exception as e:
-        st.error(f"Cloudinary upload failed: {e}")
+        st.error(f"Upload failed: {e}")
         return None
 
 def find_best_match(uploaded_file):
@@ -91,7 +87,6 @@ def find_best_match(uploaded_file):
 
     best_match = None
     best_diff = 999
-
     for row in rows:
         try:
             db_hash = imagehash.hex_to_hash(row[2])
@@ -103,7 +98,7 @@ def find_best_match(uploaded_file):
             continue
     return best_match, uploaded_image, best_diff
 
-# ===================== CORE FUNCTIONS =====================
+# ===================== SAVE FUNCTIONS =====================
 def add_to_my_collection(match, player, year, set_name, grade, notes):
     try:
         conn = get_db_connection()
@@ -114,14 +109,13 @@ def add_to_my_collection(match, player, year, set_name, grade, notes):
             INSERT INTO my_cards (reference_id, card_name, player, year, set_name, grade, notes, scanned_at, added_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
         """, (match['id'], card_name, player, year, set_name, grade, notes, datetime.now(), datetime.now()))
-        
         new_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
         return new_id
     except Exception as e:
-        st.error(f"Database Error (Add to Collection): {e}")
+        st.error(f"Error adding to collection: {e}")
         return None
 
 def save_as_new_card(pil_image, player, year, set_name):
@@ -137,14 +131,13 @@ def save_as_new_card(pil_image, player, year, set_name):
             INSERT INTO sports_cards (card_name, player, year, set_name, condition, image_url, phash, scanned_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
         """, (card_name, player, year, set_name, "Raw", image_url, phash_value, datetime.now()))
-        
         new_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
         return new_id, image_url
     except Exception as e:
-        st.error(f"Database Error (Save New Card): {e}")
+        st.error(f"Error saving new card: {e}")
         return None, None
 
 # ===================== MAIN UI =====================
@@ -152,16 +145,34 @@ st.title("🏟️ Sports Card Scanner")
 
 uploaded_file = st.file_uploader("Take photo or upload card image", type=['jpg', 'jpeg', 'png'])
 
+# Initialize session state
+if 'processed' not in st.session_state:
+    st.session_state.processed = False
+if 'match' not in st.session_state:
+    st.session_state.match = None
+if 'pil_image' not in st.session_state:
+    st.session_state.pil_image = None
+if 'best_diff' not in st.session_state:
+    st.session_state.best_diff = 999
+
 if uploaded_file:
     st.image(uploaded_file, caption="Scanned Card", width=380)
-    
+
     if st.button("🔍 Process Image", type="primary", use_container_width=True):
         with st.spinner("Analyzing card..."):
             match, pil_image, best_diff = find_best_match(uploaded_file)
+            
+            st.session_state.match = match
+            st.session_state.pil_image = pil_image
+            st.session_state.best_diff = best_diff
+            st.session_state.processed = True
 
-        # === STRONG MATCH ===
-        if match and best_diff <= 18:
-            st.success(f"✅ Strong Match: {match['name']} ({match['score']}%)")
+    # Show forms only if image has been processed
+    if st.session_state.processed and st.session_state.pil_image:
+        
+        # Strong Match Section
+        if st.session_state.match and st.session_state.best_diff <= 18:
+            st.success(f"✅ Strong Match Found: {st.session_state.match['name']} ({st.session_state.match['score']}%)")
             
             col1, col2 = st.columns(2)
             with col1:
@@ -173,13 +184,13 @@ if uploaded_file:
             grade = st.text_input("Grade (e.g. PSA 10)", key="match_grade")
             notes = st.text_area("Notes", key="match_notes")
             
-            if st.button("💾 Add to My Collection", type="primary", use_container_width=True, key="btn_add_collection"):
-                new_id = add_to_my_collection(match, player, year, set_name, grade, notes)
+            if st.button("💾 Add to My Collection", type="primary", use_container_width=True, key="btn_collection"):
+                new_id = add_to_my_collection(st.session_state.match, player, year, set_name, grade, notes)
                 if new_id:
-                    st.success(f"✅ Successfully added to My Collection! ID: {new_id}")
+                    st.success(f"✅ Added to My Collection! ID: {new_id}")
                     st.balloons()
 
-        # === SAVE AS NEW ===
+        # Save as New Card Section
         st.subheader("🆕 Save as New Card")
         col1, col2 = st.columns(2)
         with col1:
@@ -189,10 +200,11 @@ if uploaded_file:
             brand_new = st.selectbox("Set / Brand", get_brands(), key="new_set")
         
         if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True, key="btn_save_new"):
-            new_id, image_url = save_as_new_card(pil_image, player_new, year_new, brand_new)
-            if new_id:
-                st.success(f"✅ New card saved successfully! ID: {new_id}")
-                st.balloons()
+            with st.spinner("Uploading image and saving card..."):
+                new_id, image_url = save_as_new_card(st.session_state.pil_image, player_new, year_new, brand_new)
+                if new_id:
+                    st.success(f"✅ New card saved successfully! ID: {new_id}")
+                    st.balloons()
 
 # Sidebar
 with st.sidebar:
@@ -206,5 +218,5 @@ with st.sidebar:
                 st.write(f"#{row[0]} — {row[1]}")
             cur.close()
             conn.close()
-        except Exception as e:
-            st.error(f"Error: {e}")
+        except:
+            st.write("No cards found.")
