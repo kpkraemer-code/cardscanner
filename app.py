@@ -35,7 +35,7 @@ def get_db_connection():
     st.stop()
 
 # ------------------ LOAD DROPDOWN DATA ------------------
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=300)
 def get_players():
     try:
         conn = get_db_connection()
@@ -53,7 +53,7 @@ def get_brands():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT brand FROM cards_brands ORDER BY brand")
+        cur.execute("SELECT brand_name FROM cards_brands ORDER BY brand_name")
         brands = [row[0] for row in cur.fetchall()]
         cur.close()
         conn.close()
@@ -114,6 +114,78 @@ def find_best_match(uploaded_file):
 
     return best_match, uploaded_image, best_diff
 
+# ===================== UPDATED FUNCTIONS =====================
+def add_to_my_collection(match, player, year, set_name, grade, notes):
+    """Add strong match to my_cards table"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        card_name = f"{player} - {set_name} ({year})"
+        
+        cur.execute("""
+            INSERT INTO my_cards 
+            (reference_id, card_name, player, year, set_name, grade, notes, 
+             scanned_at, added_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;
+        """, (
+            match['id'],
+            card_name,
+            player,
+            year,
+            set_name,
+            grade,
+            notes,
+            datetime.now(),
+            datetime.now()
+        ))
+        
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return new_id
+    except Exception as e:
+        st.error(f"Failed to add to collection: {e}")
+        return None
+
+def save_as_new_card(pil_image, player, year, set_name):
+    """Save as new card in sports_cards table"""
+    try:
+        card_name = f"{player} - {set_name} ({year})"
+        image_url = upload_to_cloudinary(pil_image, 
+                    public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        phash_value = compute_phash(pil_image)
+        
+        cur.execute("""
+            INSERT INTO sports_cards 
+            (card_name, player, year, set_name, condition, image_url, phash, scanned_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;
+        """, (
+            card_name,
+            player,
+            year,
+            set_name,
+            "Raw",                    # Default condition since dropdown was removed
+            image_url,
+            phash_value,
+            datetime.now()
+        ))
+        
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return new_id, image_url
+    except Exception as e:
+        st.error(f"Error saving new card: {e}")
+        return None, None
+
 # ------------------ MAIN UI ------------------
 st.title("🏟️ Sports Card Scanner")
 st.markdown("Take a photo or upload an image")
@@ -121,13 +193,12 @@ st.markdown("Take a photo or upload an image")
 uploaded_file = st.file_uploader("Scan your sports card", type=['jpg', 'jpeg', 'png'])
 
 if uploaded_file:
-    # Display image in Portrait orientation with fixed width
-    st.image(uploaded_file, caption="Scanned Card", width=380)   # Fixed width for portrait feel
+    st.image(uploaded_file, caption="Scanned Card", width=380)
     
     with st.spinner("Searching for matches..."):
         match, pil_image, best_diff = find_best_match(uploaded_file)
 
-    # ===================== STRONG MATCH SECTION =====================
+    # ===================== STRONG MATCH =====================
     if match and best_diff <= 18:
         st.success(f"✅ **Strong Match Found!** {match['name']} ({match['score']}%)")
         
@@ -143,46 +214,16 @@ if uploaded_file:
         
         if st.button("💾 Add to My Collection", type="primary", use_container_width=True):
             with st.spinner("Adding to collection..."):
-                # You can extend add_to_my_collection to accept image_url if needed
-                new_id = add_to_my_collection(...)   # Keep your existing function
+                new_id = add_to_my_collection(
+                    match=match,
+                    player=player,
+                    year=year,
+                    set_name=set_name,
+                    grade=grade,
+                    notes=notes
+                )
                 if new_id:
                     st.success(f"✅ Added to My Collection! ID: {new_id}")
                     st.balloons()
 
-    # ===================== SAVE AS NEW CARD =====================
-    st.subheader("🆕 Save as New Card in Database")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        player_new = st.selectbox("Player Name", options=get_players(), key="new_player")
-        year_new = st.number_input("Year", min_value=1900, max_value=2026, value=2023, key="new_year")
-    with col2:
-        brand_new = st.selectbox("Set / Brand", options=get_brands(), key="new_set_name")
-    
-    if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True):
-        card_name = f"{player_new} - {brand_new} ({year_new})"  # Auto generate card name
-        
-        with st.spinner("Uploading image and saving..."):
-            new_id, image_url = save_as_new_card(
-                pil_image=pil_image,
-                card_name=card_name,
-                player=player_new,
-                year=year_new,
-                set_name=brand_new,
-                condition="Raw"   # Removed condition dropdown
-            )
-            if new_id:
-                st.success(f"✅ New card saved! ID: {new_id}")
-                st.balloons()
-
-# ------------------ SIDEBAR ------------------
-with st.sidebar:
-    st.header("My Collection")
-    if st.button("View Recent Cards"):
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, card_name FROM my_cards ORDER BY added_at DESC LIMIT 10")
-        for row in cur.fetchall():
-            st.write(f"#{row[0]} — {row[1]}")
-        cur.close()
-        conn.close()
+    # ===================== SAVE
