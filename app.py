@@ -75,13 +75,17 @@ def upload_to_cloudinary(pil_image, public_id=None):
         return None
 
 def find_best_match(uploaded_file):
-    """Improved matching with debug info"""
+    """Return best match + stored image URL"""
     uploaded_image = Image.open(uploaded_file).convert('RGB')
     uploaded_hash = imagehash.phash(uploaded_image)
     
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, card_name, phash FROM sports_cards WHERE phash IS NOT NULL")
+    cur.execute("""
+        SELECT id, card_name, phash, image_url 
+        FROM sports_cards 
+        WHERE phash IS NOT NULL
+    """)
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -101,7 +105,8 @@ def find_best_match(uploaded_file):
                     'id': row[0],
                     'name': row[1],
                     'diff': diff,
-                    'score': round((1 - diff / 64.0) * 100, 1)
+                    'score': round((1 - diff / 64.0) * 100, 1),
+                    'image_url': row[3]
                 }
         except:
             continue
@@ -165,7 +170,7 @@ if 'best_diff' not in st.session_state:
     st.session_state.best_diff = 999
 
 if uploaded_file:
-    st.image(uploaded_file, caption="Scanned Card", width=380)
+    st.image(uploaded_file, caption="Your Scanned Card", width=380)
 
     if st.button("🔍 Process Image", type="primary", use_container_width=True):
         with st.spinner("Analyzing card and searching for matches..."):
@@ -176,12 +181,20 @@ if uploaded_file:
             st.session_state.best_diff = best_diff
             st.session_state.processed = True
 
-    # Show results only after processing
     if st.session_state.processed and st.session_state.pil_image:
         
+        # ==================== STRONG MATCH ====================
         if st.session_state.match and st.session_state.best_diff <= 18:
-            st.success(f"✅ **Strong Match Found!** {st.session_state.match['name']} ({st.session_state.match['score']}%)")
+            match = st.session_state.match
+            st.success(f"✅ **Strong Match Found!** {match['name']} ({match['score']}%)")
             
+            # Display stored image for visual confirmation
+            if match.get('image_url'):
+                st.image(match['image_url'], caption="Stored Image from Database (for confirmation)", width=380)
+            else:
+                st.warning("No stored image available for this card")
+            
+            # Form to add to collection
             col1, col2 = st.columns(2)
             with col1:
                 player = st.selectbox("Player Name", get_players(), key="match_player")
@@ -193,18 +206,15 @@ if uploaded_file:
             notes = st.text_area("Notes", key="match_notes")
             
             if st.button("💾 Add to My Collection", type="primary", use_container_width=True, key="btn_collection"):
-                new_id = add_to_my_collection(st.session_state.match, player, year, set_name, grade, notes)
+                new_id = add_to_my_collection(match, player, year, set_name, grade, notes)
                 if new_id:
                     st.success(f"✅ Added to My Collection! ID: {new_id}")
                     st.balloons()
-        
-        else:
-            if st.session_state.match:
-                st.warning(f"Closest match: {st.session_state.match['name']} ({st.session_state.match['score']}%) — Difference too high")
-            else:
-                st.info("No matches found in database.")
 
-        # === SAVE AS NEW CARD (Always available) ===
+        else:
+            st.warning("No strong match found.")
+
+        # ==================== SAVE AS NEW ====================
         st.subheader("🆕 Save as New Card")
         col1, col2 = st.columns(2)
         with col1:
