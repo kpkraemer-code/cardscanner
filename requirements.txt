@@ -1,5 +1,8 @@
 streamlit>=1.38.0
 pillow
-imagehash
 psycopg2-binary
 cloudinary
+sentence-transformers
+torch
+torchvision
+torchaudio
