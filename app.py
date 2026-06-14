@@ -29,33 +29,6 @@ def get_db_connection():
     st.error("DATABASE_URL not found")
     st.stop()
 
-# ------------------ DROPDOWNS ------------------
-@st.cache_data(ttl=300)
-def get_players():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT player_name FROM cards_players ORDER BY player_name")
-        players = [row[0] for row in cur.fetchall()]
-        cur.close()
-        conn.close()
-        return players or ["Unknown"]
-    except:
-        return ["Unknown"]
-
-@st.cache_data(ttl=300)
-def get_brands():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT brand_name FROM cards_brands ORDER BY brand_name")
-        brands = [row[0] for row in cur.fetchall()]
-        cur.close()
-        conn.close()
-        return brands or ["Unknown"]
-    except:
-        return ["Unknown"]
-
 # ------------------ HELPERS ------------------
 def compute_phash(image):
     return str(imagehash.phash(image))
@@ -75,7 +48,6 @@ def upload_to_cloudinary(pil_image, public_id=None):
         return None
 
 def find_best_match(uploaded_file):
-    """Return best match + stored image URL"""
     uploaded_image = Image.open(uploaded_file).convert('RGB')
     uploaded_hash = imagehash.phash(uploaded_image)
     
@@ -90,30 +62,27 @@ def find_best_match(uploaded_file):
     cur.close()
     conn.close()
 
-    st.info(f"Comparing against **{len(rows)}** cards in database...")
-
-    best_match = None
-    best_diff = 999
-
+    matches = []
     for row in rows:
         try:
             db_hash = imagehash.hex_to_hash(row[2])
             diff = uploaded_hash - db_hash
-            if diff < best_diff:
-                best_diff = diff
-                best_match = {
-                    'id': row[0],
-                    'name': row[1],
-                    'diff': diff,
-                    'score': round((1 - diff / 64.0) * 100, 1),
-                    'image_url': row[3]
-                }
+            score = round((1 - diff / 64.0) * 100, 1)
+            matches.append({
+                'id': row[0],
+                'name': row[1],
+                'diff': diff,
+                'score': score,
+                'image_url': row[3]
+            })
         except:
             continue
 
-    return best_match, uploaded_image, best_diff
+    # Sort by best score
+    matches.sort(key=lambda x: x['diff'])
+    return matches, uploaded_image
 
-# ------------------ SAVE FUNCTIONS ------------------
+# ------------------ SAVE FUNCTIONS (unchanged) ------------------
 def add_to_my_collection(match, player, year, set_name, grade, notes):
     try:
         conn = get_db_connection()
@@ -130,7 +99,7 @@ def add_to_my_collection(match, player, year, set_name, grade, notes):
         conn.close()
         return new_id
     except Exception as e:
-        st.error(f"Error adding to collection: {e}")
+        st.error(f"Error: {e}")
         return None
 
 def save_as_new_card(pil_image, player, year, set_name):
@@ -152,7 +121,7 @@ def save_as_new_card(pil_image, player, year, set_name):
         conn.close()
         return new_id, image_url
     except Exception as e:
-        st.error(f"Error saving new card: {e}")
+        st.error(f"Error saving card: {e}")
         return None, None
 
 # ===================== MAIN UI =====================
@@ -162,39 +131,37 @@ uploaded_file = st.file_uploader("Take photo or upload card image", type=['jpg',
 
 if 'processed' not in st.session_state:
     st.session_state.processed = False
-if 'match' not in st.session_state:
-    st.session_state.match = None
-if 'pil_image' not in st.session_state:
-    st.session_state.pil_image = None
-if 'best_diff' not in st.session_state:
-    st.session_state.best_diff = 999
+if 'matches' not in st.session_state:
+    st.session_state.matches = []
 
 if uploaded_file:
     st.image(uploaded_file, caption="Your Scanned Card", width=380)
 
     if st.button("🔍 Process Image", type="primary", use_container_width=True):
-        with st.spinner("Analyzing card and searching for matches..."):
-            match, pil_image, best_diff = find_best_match(uploaded_file)
-            
-            st.session_state.match = match
+        with st.spinner("Comparing to database..."):
+            matches, pil_image = find_best_match(uploaded_file)
+            st.session_state.matches = matches
             st.session_state.pil_image = pil_image
-            st.session_state.best_diff = best_diff
             st.session_state.processed = True
 
-    if st.session_state.processed and st.session_state.pil_image:
-        
-        # ==================== STRONG MATCH ====================
-        if st.session_state.match and st.session_state.best_diff <= 18:
-            match = st.session_state.match
-            st.success(f"✅ **Strong Match Found!** {match['name']} ({match['score']}%)")
+    if st.session_state.processed and st.session_state.matches:
+        matches = st.session_state.matches
+        top = matches[0]
+
+        st.info(f"Top match score: **{top['score']}%** (Lower difference = better)")
+
+        # Strong Match
+        if top['diff'] <= 10:          # Much stricter threshold
+            st.success(f"✅ **Strong Match** — {top['name']} ({top['score']}%)")
             
-            # Display stored image for visual confirmation
-            if match.get('image_url'):
-                st.image(match['image_url'], caption="Stored Image from Database (for confirmation)", width=380)
-            else:
-                st.warning("No stored image available for this card")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(uploaded_file, caption="Your Scan", width=300)
+            with col2:
+                if top.get('image_url'):
+                    st.image(top['image_url'], caption="Stored Card", width=300)
             
-            # Form to add to collection
+            # Add to collection form
             col1, col2 = st.columns(2)
             with col1:
                 player = st.selectbox("Player Name", get_players(), key="match_player")
@@ -202,19 +169,25 @@ if uploaded_file:
             with col2:
                 set_name = st.selectbox("Set / Brand", get_brands(), key="match_set")
             
-            grade = st.text_input("Grade (e.g. PSA 10)", key="match_grade")
+            grade = st.text_input("Grade", key="match_grade")
             notes = st.text_area("Notes", key="match_notes")
             
-            if st.button("💾 Add to My Collection", type="primary", use_container_width=True, key="btn_collection"):
-                new_id = add_to_my_collection(match, player, year, set_name, grade, notes)
+            if st.button("💾 Add to My Collection", type="primary", use_container_width=True):
+                new_id = add_to_my_collection(top, player, year, set_name, grade, notes)
                 if new_id:
-                    st.success(f"✅ Added to My Collection! ID: {new_id}")
+                    st.success(f"Added! ID: {new_id}")
                     st.balloons()
 
         else:
-            st.warning("No strong match found.")
+            st.warning(f"**No Strong Match** — Best match is only {top['score']}% similar")
+            
+            st.write("### Top 3 Closest Cards:")
+            for m in matches[:3]:
+                st.write(f"- **{m['name']}** — {m['score']}% similar (diff: {m['diff']})")
+                if m.get('image_url'):
+                    st.image(m['image_url'], width=250)
 
-        # ==================== SAVE AS NEW ====================
+        # Save as New Card (always available)
         st.subheader("🆕 Save as New Card")
         col1, col2 = st.columns(2)
         with col1:
@@ -223,24 +196,9 @@ if uploaded_file:
         with col2:
             brand_new = st.selectbox("Set / Brand", get_brands(), key="new_set")
         
-        if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True, key="btn_save_new"):
-            with st.spinner("Uploading image and saving..."):
-                new_id, image_url = save_as_new_card(st.session_state.pil_image, player_new, year_new, brand_new)
+        if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True):
+            with st.spinner("Saving..."):
+                new_id, _ = save_as_new_card(st.session_state.pil_image, player_new, year_new, brand_new)
                 if new_id:
-                    st.success(f"✅ New card saved successfully! ID: {new_id}")
+                    st.success(f"New card saved! ID: {new_id}")
                     st.balloons()
-
-# Sidebar
-with st.sidebar:
-    st.header("My Collection")
-    if st.button("View Recent Cards"):
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT id, card_name FROM my_cards ORDER BY added_at DESC LIMIT 10")
-            for row in cur.fetchall():
-                st.write(f"#{row[0]} — {row[1]}")
-            cur.close()
-            conn.close()
-        except:
-            st.write("No cards found.")
