@@ -80,33 +80,29 @@ def upload_to_cloudinary(pil_image, public_id=None):
         st.error(f"Upload failed: {e}")
         return None
 
-# ===================== SAVE FUNCTIONS =====================
-def add_to_my_collection(match, player, year, set_name, grade, notes):
+def increment_qty(card_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        card_name = f"{player} - {set_name} ({year})"
-        
         cur.execute("""
-            INSERT INTO my_cards 
-            (reference_id, card_name, player, year, set_name, grade, notes, scanned_at, added_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
-        """, (match[0], card_name, player, year, set_name, grade, notes, datetime.now(), datetime.now()))
-        
-        new_id = cur.fetchone()[0]
+            UPDATE sports_cards 
+            SET qty_available = COALESCE(qty_available, 0) + 1 
+            WHERE id = %s
+            RETURNING qty_available;
+        """, (card_id,))
+        new_qty = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
-        return new_id
+        return new_qty
     except Exception as e:
-        st.error(f"Error adding to collection: {e}")
+        st.error(f"Error updating quantity: {e}")
         return None
 
 def save_as_new_card(pil_image, player, year, set_name):
     try:
         card_name = f"{player} - {set_name} ({year})"
         image_url = upload_to_cloudinary(pil_image, public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        
         embedding = get_embedding(pil_image)
         
         conn = get_db_connection()
@@ -114,9 +110,9 @@ def save_as_new_card(pil_image, player, year, set_name):
         
         cur.execute("""
             INSERT INTO sports_cards 
-            (card_name, player, year, set_name, condition, image_url, phash, embedding, scanned_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector, %s) RETURNING id;
-        """, (card_name, player, year, set_name, "Raw", image_url, None, embedding, datetime.now()))
+            (card_name, player, year, set_name, condition, image_url, embedding, scanned_at, qty_available)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s, 1) RETURNING id;
+        """, (card_name, player, year, set_name, "Raw", image_url, embedding, datetime.now()))
         
         new_id = cur.fetchone()[0]
         conn.commit()
@@ -129,7 +125,7 @@ def save_as_new_card(pil_image, player, year, set_name):
 
 # ===================== MAIN UI =====================
 st.title("🏟️ Sports Card Scanner")
-st.caption("Powered by CLIP AI • High Accuracy Matching")
+st.caption("Powered by CLIP AI • Click image to +1 quantity")
 
 uploaded_file = st.file_uploader("Take photo or upload card image", type=['jpg', 'jpeg', 'png'])
 
@@ -150,7 +146,7 @@ if uploaded_file:
                 FROM sports_cards 
                 WHERE embedding IS NOT NULL
                 ORDER BY embedding <=> %s::vector 
-                LIMIT 5
+                LIMIT 6
             """, (embedding, embedding))
             
             results = cur.fetchall()
@@ -158,45 +154,22 @@ if uploaded_file:
             conn.close()
 
             if results:
-                best = results[0]
-                similarity = round((1 - best[3]) * 100, 1)
-
-                if similarity >= 78:
-                    st.success(f"✅ Strong Match Found: **{best[1]}** ({similarity}%)")
+                st.write("### Click on a card image to increase its quantity (+1)")
+                
+                for row in results:
+                    card_id = row[0]
+                    card_name = row[1]
+                    image_url = row[2]
+                    distance = row[3]
+                    similarity = round((1 - distance) * 100, 1)
                     
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.image(uploaded_file, caption="Your Scan", width=300)
-                    with col2:
-                        if best[2]:
-                            st.image(best[2], caption="Matched Card from Database", width=300)
-                    
-                    # Add to My Collection Form
-                    st.subheader("Add to My Collection")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        player = st.selectbox("Player Name", get_players(), key="match_player")
-                        year = st.number_input("Year", 1900, 2026, 2023, key="match_year")
-                    with col2:
-                        set_name = st.selectbox("Set / Brand", get_brands(), key="match_set")
-                    
-                    grade = st.text_input("Grade (e.g. PSA 10)", key="match_grade")
-                    notes = st.text_area("Notes", key="match_notes")
-                    
-                    if st.button("💾 Add to My Collection", type="primary", use_container_width=True, key="btn_collection"):
-                        new_id = add_to_my_collection(best, player, year, set_name, grade, notes)
-                        if new_id:
-                            st.success(f"✅ Card added to My Collection! ID: {new_id}")
-                            st.balloons()
-                else:
-                    st.warning(f"Best match is only {similarity}% similar")
-
-                # Show other close matches
-                if len(results) > 1:
-                    st.write("### Other Close Matches")
-                    for row in results[1:]:
-                        sim = round((1 - row[3]) * 100, 1)
-                        st.image(row[2], width=180, caption=f"{row[1]} ({sim}%)")
+                    if image_url:
+                        # Make image clickable
+                        if st.image(image_url, caption=f"{card_name} ({similarity}%)", width=320):
+                            new_qty = increment_qty(card_id)
+                            if new_qty is not None:
+                                st.success(f"✅ Quantity updated! New qty: **{new_qty}** for **{card_name}**")
+                                st.rerun()
 
     # ===================== SAVE AS NEW CARD =====================
     st.subheader("🆕 Save as New Card")
@@ -207,25 +180,22 @@ if uploaded_file:
     with col2:
         brand_new = st.selectbox("Set / Brand", get_brands(), key="new_set")
     
-    if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True, key="btn_save_new"):
-        with st.spinner("Uploading image and saving card..."):
+    if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True):
+        with st.spinner("Saving new card..."):
             pil_image = Image.open(uploaded_file).convert('RGB')
-            new_id, image_url = save_as_new_card(pil_image, player_new, year_new, brand_new)
+            new_id, _ = save_as_new_card(pil_image, player_new, year_new, brand_new)
             if new_id:
-                st.success(f"✅ New card saved successfully! ID: {new_id}")
+                st.success(f"✅ New card saved! ID: {new_id} (Qty = 1)")
                 st.balloons()
 
-# ------------------ SIDEBAR ------------------
+# Sidebar
 with st.sidebar:
-    st.header("My Collection")
-    if st.button("View Recent Cards"):
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT id, card_name FROM my_cards ORDER BY added_at DESC LIMIT 10")
-            for row in cur.fetchall():
-                st.write(f"#{row[0]} — {row[1]}")
-            cur.close()
-            conn.close()
-        except:
-            st.write("No cards found.")
+    st.header("Database Info")
+    if st.button("View All Cards with Quantity"):
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, card_name, qty_available FROM sports_cards ORDER BY qty_available DESC LIMIT 15")
+        for row in cur.fetchall():
+            st.write(f"#{row[0]} — {row[1]} → **{row[2]}** pcs")
+        cur.close()
+        conn.close()
