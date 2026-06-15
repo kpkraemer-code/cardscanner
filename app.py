@@ -136,7 +136,8 @@ if 'processed' not in st.session_state:
     st.session_state.processed = False
 
 if uploaded_file:
-    st.image(uploaded_file, caption="Your Scanned Card", width=380)
+    # Portrait display for uploaded image
+    st.image(uploaded_file, caption="Your Scanned Card", width=320)
 
     if st.button("🔍 Process with AI", type="primary", use_container_width=True):
         with st.spinner("AI analyzing card..."):
@@ -167,6 +168,7 @@ if uploaded_file:
             similarity = round((1 - row[3]) * 100, 1)
 
             if image_url:
+                # Portrait display for matched cards
                 st.image(image_url, caption=f"{card_name} ({similarity}%)", width=320)
                 
                 col1, col2 = st.columns([4, 1])
@@ -189,7 +191,7 @@ if uploaded_file:
             brand_new = st.selectbox("Set / Brand", get_brands(), key="new_set")
         
         if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True):
-            with st.spinner("Saving new card..."):
+            with st.spinner("Saving..."):
                 pil_image = Image.open(uploaded_file).convert('RGB')
                 new_id = save_as_new_card(pil_image, player_new, year_new, brand_new)
                 if new_id:
