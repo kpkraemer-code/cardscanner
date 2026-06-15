@@ -8,8 +8,16 @@ import cloudinary
 import cloudinary.uploader
 from io import BytesIO
 from sentence_transformers import SentenceTransformer
+import requests
 
 st.set_page_config(page_title="Sports Card Scanner", layout="centered")
+
+# Hide Streamlit warning messages
+st.markdown("""
+    <style>
+    .stDeployButton {display: none;}
+    </style>
+""", unsafe_allow_html=True)
 
 # ------------------ CONFIG ------------------
 cloudinary.config(
@@ -35,7 +43,7 @@ def get_db_connection():
     st.error("DATABASE_URL not found")
     st.stop()
 
-# ------------------ DROPDOWNS (unchanged) ------------------
+# ------------------ DROPDOWNS ------------------
 @st.cache_data(ttl=300)
 def get_players():
     try:
@@ -62,13 +70,18 @@ def get_brands():
     except:
         return ["Unknown"]
 
-# ------------------ HELPERS ------------------
+# ------------------ IMAGE HELPERS ------------------
 def force_portrait(image, target_width=320):
-    """Force image to portrait orientation"""
-    if image.width > image.height:  # If landscape, rotate it
-        image = image.rotate(90, expand=True)
-    
-    # Resize while maintaining aspect ratio
+    """Force image to portrait and fix upside-down issue"""
+    # Rotate 180 degrees if it's upside down
+    if image.width > image.height:          # Landscape
+        image = image.rotate(180, expand=True)
+    elif image.height > image.width * 1.4:  # Very tall already
+        pass
+    else:
+        image = image.rotate(180, expand=True)  # Fix common upside-down phone photos
+
+    # Resize to portrait
     aspect_ratio = image.height / image.width
     target_height = int(target_width * aspect_ratio)
     image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
@@ -147,7 +160,7 @@ if 'processed' not in st.session_state:
     st.session_state.processed = False
 
 if uploaded_file:
-    # Force portrait for uploaded image
+    # Force portrait + fix upside down
     uploaded_img = Image.open(uploaded_file).convert('RGB')
     portrait_img = force_portrait(uploaded_img, target_width=320)
     st.image(portrait_img, caption="Your Scanned Card", use_column_width=False)
@@ -180,10 +193,9 @@ if uploaded_file:
             similarity = round((1 - row[3]) * 100, 1)
 
             if image_url:
-                # Force portrait for matched images
                 try:
-                    response = requests.get(image_url)
-                    match_img = Image.open(BytesIO(response.content)).convert('RGB')
+                    resp = requests.get(image_url)
+                    match_img = Image.open(BytesIO(resp.content)).convert('RGB')
                     portrait_match = force_portrait(match_img, target_width=320)
                     st.image(portrait_match, caption=f"{card_name} ({similarity}%)", use_column_width=False)
                 except:
@@ -199,7 +211,7 @@ if uploaded_file:
 
         st.divider()
 
-        # Save as New Card Section
+        # Save as New Card
         st.subheader("🆕 Save as New Card")
         col1, col2 = st.columns(2)
         with col1:
@@ -215,3 +227,15 @@ if uploaded_file:
                 if new_id:
                     st.success(f"✅ New card saved! ID: {new_id}")
                     st.balloons()
+
+# Sidebar
+with st.sidebar:
+    st.header("Quick Stats")
+    if st.button("Show Inventory"):
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM sports_cards")
+        total = cur.fetchone()[0]
+        st.write(f"Total Cards: **{total}**")
+        cur.close()
+        conn.close()
