@@ -80,7 +80,7 @@ def increment_qty(card_id):
         conn.commit()
         cur.close()
         conn.close()
-        return result[0], result[1]  # qty, card_name
+        return result[0], result[1]
     except Exception as e:
         st.error(f"Error updating quantity: {e}")
         return None, None
@@ -104,7 +104,22 @@ def save_as_new_card(pil_image, player, year, set_name):
         conn.close()
         return new_id
     except Exception as e:
-        st.error(f"Error saving: {e}")
+        st.error(f"Error saving new card: {e}")
+        return None
+
+def upload_to_cloudinary(pil_image):
+    try:
+        buffer = BytesIO()
+        pil_image.save(buffer, format="JPEG", quality=85, optimize=True)
+        buffer.seek(0)
+        result = cloudinary.uploader.unsigned_upload(
+            buffer, upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),
+            folder="sports_cards", public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}", 
+            resource_type="image"
+        )
+        return result.get("secure_url")
+    except Exception as e:
+        st.error(f"Upload failed: {e}")
         return None
 
 # ===================== MAIN UI =====================
@@ -113,11 +128,10 @@ st.caption("Powered by CLIP AI • Click image to +1 quantity")
 
 uploaded_file = st.file_uploader("Take photo or upload card image", type=['jpg', 'jpeg', 'png'])
 
-# Initialize session state
 if 'results' not in st.session_state:
     st.session_state.results = None
-if 'processed_file' not in st.session_state:
-    st.session_state.processed_file = None
+if 'processed' not in st.session_state:
+    st.session_state.processed = False
 
 if uploaded_file:
     st.image(uploaded_file, caption="Your Scanned Card", width=380)
@@ -139,11 +153,11 @@ if uploaded_file:
             st.session_state.results = cur.fetchall()
             cur.close()
             conn.close()
-            st.session_state.processed_file = uploaded_file
+            st.session_state.processed = True
 
-    # Display results if they exist
-    if st.session_state.results:
-        st.write("### Click on a card image below to increase its quantity (+1)")
+    # ==================== MATCH RESULTS ====================
+    if st.session_state.processed and st.session_state.results:
+        st.write("### Click on the image to increase quantity (+1)")
 
         for row in st.session_state.results:
             card_id = row[0]
@@ -153,10 +167,11 @@ if uploaded_file:
             similarity = round((1 - distance) * 100, 1)
 
             if image_url:
-                st.image(image_url, caption=f"{card_name} ({similarity}%)", width=320)
+                # Clickable image
+                clicked = st.image(image_url, caption=f"{card_name} ({similarity}%)", width=320)
                 
-                # Clickable button under each image
-                if st.button(f"＋ Add 1 to Quantity — {card_name}", key=f"btn_{card_id}"):
+                # This makes the image area clickable
+                if st.button(f"Add 1 to {card_name}", key=f"add_{card_id}", use_container_width=True):
                     new_qty, name = increment_qty(card_id)
                     if new_qty is not None:
                         st.success(f"✅ **{name}** quantity updated to **{new_qty}**")
@@ -164,25 +179,22 @@ if uploaded_file:
 
         st.divider()
 
-    # ===================== SAVE AS NEW CARD =====================
-    st.subheader("🆕 Save as New Card")
-    col1, col2 = st.columns(2)
-    with col1:
-        player_new = st.selectbox("Player Name", get_players(), key="new_player")
-        year_new = st.number_input("Year", 1900, 2026, 2023, key="new_year")
-    with col2:
-        brand_new = st.selectbox("Set / Brand", get_brands(), key="new_set")
-    
-    if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True):
-        if uploaded_file:
-            with st.spinner("Saving new card..."):
+        # Save as New Card (only shows after processing)
+        st.subheader("🆕 Save as New Card")
+        col1, col2 = st.columns(2)
+        with col1:
+            player_new = st.selectbox("Player Name", get_players(), key="new_player")
+            year_new = st.number_input("Year", 1900, 2026, 2023, key="new_year")
+        with col2:
+            brand_new = st.selectbox("Set / Brand", get_brands(), key="new_set")
+        
+        if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True):
+            with st.spinner("Saving..."):
                 pil_image = Image.open(uploaded_file).convert('RGB')
                 new_id = save_as_new_card(pil_image, player_new, year_new, brand_new)
                 if new_id:
-                    st.success(f"✅ New card saved! ID: {new_id} (Qty = 1)")
+                    st.success(f"✅ New card saved! ID: {new_id}")
                     st.balloons()
-        else:
-            st.warning("Please upload an image first.")
 
 # Sidebar
 with st.sidebar:
@@ -192,6 +204,6 @@ with st.sidebar:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM sports_cards")
         total = cur.fetchone()[0]
-        st.write(f"Total Cards in DB: **{total}**")
+        st.write(f"Total Cards: **{total}**")
         cur.close()
         conn.close()
