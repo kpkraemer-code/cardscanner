@@ -12,10 +12,11 @@ import requests
 
 st.set_page_config(page_title="Sports Card Scanner", layout="centered")
 
-# Hide Streamlit banners
+# Hide Streamlit UI elements
 st.markdown("""
     <style>
-    .stDeployButton, div[data-testid="stToolbar"] {display: none !important;}
+    .stDeployButton, div[data-testid="stToolbar"], footer {display: none !important;}
+    .stImage img {border-radius: 8px;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -43,116 +44,23 @@ def get_db_connection():
     st.error("DATABASE_URL not found")
     st.stop()
 
-# ------------------ DROPDOWNS ------------------
-@st.cache_data(ttl=300)
-def get_players():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT player_name FROM cards_players ORDER BY player_name")
-        players = [row[0] for row in cur.fetchall()]
-        cur.close()
-        conn.close()
-        return players or ["Unknown"]
-    except:
-        return ["Unknown"]
+# ------------------ FORCE PORTRAIT HTML ------------------
+def display_portrait_image(image_url, caption, key=None):
+    """Display image forced as portrait using HTML"""
+    html = f"""
+    <div style="text-align: center; margin-bottom: 10px;">
+        <p style="margin-bottom: 5px; font-size: 14px;">{caption}</p>
+        <img src="{image_url}" 
+             style="width: 300px; max-width: 300px; height: auto; border-radius: 12px; 
+                    object-fit: contain; transform: rotate(0deg);"
+             alt="{caption}">
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
 
-@st.cache_data(ttl=300)
-def get_brands():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT brand_name FROM cards_brands ORDER BY brand_name")
-        brands = [row[0] for row in cur.fetchall()]
-        cur.close()
-        conn.close()
-        return brands or ["Unknown"]
-    except:
-        return ["Unknown"]
-
-# ------------------ FORCE PORTRAIT ------------------
-def force_portrait(image, target_width=300):
-    """Aggressive portrait conversion for iPhone Safari"""
-    img = image.copy().convert('RGB')
-    
-    # Rotate to portrait if needed
-    if img.width > img.height:
-        img = img.rotate(180, expand=True)
-    
-    # Force portrait aspect ratio (taller than wide)
-    if img.width > img.height * 0.9:   # If not tall enough
-        img = img.rotate(180, expand=True)
-    
-    # Resize
-    aspect_ratio = img.height / img.width
-    target_height = int(target_width * aspect_ratio * 1.1)  # Slightly taller
-    img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
-    return img
-
-def get_embedding(image):
-    return model.encode(image).tolist()
-
-def increment_qty(card_id):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE sports_cards 
-            SET qty_available = COALESCE(qty_available, 0) + 1 
-            WHERE id = %s
-            RETURNING qty_available, card_name;
-        """, (card_id,))
-        result = cur.fetchone()
-        conn.commit()
-        cur.close()
-        conn.close()
-        return result[0], result[1]
-    except Exception as e:
-        st.error(f"Error: {e}")
-        return None, None
-
-def upload_to_cloudinary(pil_image):
-    try:
-        buffer = BytesIO()
-        pil_image.save(buffer, format="JPEG", quality=85, optimize=True)
-        buffer.seek(0)
-        result = cloudinary.uploader.unsigned_upload(
-            buffer, 
-            upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),
-            folder="sports_cards", 
-            public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}", 
-            resource_type="image"
-        )
-        return result.get("secure_url")
-    except Exception as e:
-        st.error(f"Upload failed: {e}")
-        return None
-
-def save_as_new_card(pil_image, player, year, set_name):
-    try:
-        card_name = f"{player} - {set_name} ({year})"
-        image_url = upload_to_cloudinary(pil_image)
-        embedding = get_embedding(pil_image)
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO sports_cards 
-            (card_name, player, year, set_name, condition, image_url, embedding, scanned_at, qty_available)
-            VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s, 1) RETURNING id;
-        """, (card_name, player, year, set_name, "Raw", image_url, embedding, datetime.now()))
-        new_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        return new_id
-    except Exception as e:
-        st.error(f"Error saving: {e}")
-        return None
-
-# ===================== MAIN UI =====================
+# ------------------ MAIN UI ------------------
 st.title("🏟️ Sports Card Scanner")
-st.caption("Powered by CLIP AI • Click +1 to increase quantity")
+st.caption("Powered by CLIP AI • Tap +1 to increase quantity")
 
 uploaded_file = st.file_uploader("Take photo or upload card image", type=['jpg', 'jpeg', 'png'])
 
@@ -162,13 +70,15 @@ if 'processed' not in st.session_state:
     st.session_state.processed = False
 
 if uploaded_file:
-    uploaded_img = Image.open(uploaded_file).convert('RGB')
-    portrait_img = force_portrait(uploaded_img, target_width=300)
-    st.image(portrait_img, caption="Your Scanned Card", width=300)
+    # Display uploaded image in portrait
+    img = Image.open(uploaded_file).convert('RGB')
+    if img.width > img.height:
+        img = img.rotate(180, expand=True)
+    st.image(img, caption="Your Scanned Card", width=300)
 
     if st.button("🔍 Process with AI", type="primary", use_container_width=True):
         with st.spinner("AI analyzing card..."):
-            embedding = get_embedding(portrait_img)
+            embedding = model.encode(img).tolist()
 
             conn = get_db_connection()
             cur = conn.cursor()
@@ -185,7 +95,7 @@ if uploaded_file:
             st.session_state.processed = True
 
     if st.session_state.processed and st.session_state.results:
-        st.write("### Click **+1** to increase quantity")
+        st.write("### Tap **+1** to increase quantity")
 
         for row in st.session_state.results:
             card_id = row[0]
@@ -194,17 +104,11 @@ if uploaded_file:
             similarity = round((1 - row[3]) * 100, 1)
 
             if image_url:
-                try:
-                    resp = requests.get(image_url, timeout=10)
-                    match_img = Image.open(BytesIO(resp.content)).convert('RGB')
-                    portrait_match = force_portrait(match_img, target_width=300)
-                    st.image(portrait_match, caption=f"{card_name} ({similarity}%)", width=300)
-                except:
-                    st.image(image_url, caption=f"{card_name} ({similarity}%)", width=300)
+                display_portrait_image(image_url, f"{card_name} ({similarity}%)")
 
                 col1, col2 = st.columns([4, 1])
                 with col2:
-                    if st.button("＋1", key=f"add_{card_id}", help=f"Add 1 to {card_name}"):
+                    if st.button("＋1", key=f"add_{card_id}"):
                         new_qty, name = increment_qty(card_id)
                         if new_qty is not None:
                             st.success(f"✅ {name} → **{new_qty}**")
@@ -223,20 +127,7 @@ if uploaded_file:
         
         if st.button("Save as New Card + Upload Image", type="secondary", use_container_width=True):
             with st.spinner("Saving..."):
-                pil_image = Image.open(uploaded_file).convert('RGB')
-                new_id = save_as_new_card(pil_image, player_new, year_new, brand_new)
+                new_id = save_as_new_card(Image.open(uploaded_file).convert('RGB'), player_new, year_new, brand_new)
                 if new_id:
                     st.success(f"✅ New card saved! ID: {new_id}")
                     st.balloons()
-
-# Sidebar
-with st.sidebar:
-    st.header("Quick Stats")
-    if st.button("Show Inventory"):
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM sports_cards")
-        total = cur.fetchone()[0]
-        st.write(f"Total Cards: **{total}**")
-        cur.close()
-        conn.close()
