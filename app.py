@@ -12,11 +12,10 @@ import requests
 
 st.set_page_config(page_title="Sports Card Scanner", layout="centered")
 
-# Hide Streamlit warnings
+# Hide Streamlit banners
 st.markdown("""
     <style>
-    .stDeployButton {display: none;}
-    div[data-testid="stToolbar"] {display: none;}
+    .stDeployButton, div[data-testid="stToolbar"] {display: none !important;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -71,18 +70,22 @@ def get_brands():
     except:
         return ["Unknown"]
 
-# ------------------ PORTRAIT HELPER ------------------
-def force_portrait(image, target_width=320):
-    """Force image into portrait orientation"""
-    img = image.copy()
+# ------------------ FORCE PORTRAIT ------------------
+def force_portrait(image, target_width=300):
+    """Aggressive portrait conversion for iPhone Safari"""
+    img = image.copy().convert('RGB')
     
-    # Rotate if landscape or upside down (common with phone photos)
+    # Rotate to portrait if needed
     if img.width > img.height:
         img = img.rotate(180, expand=True)
     
-    # Resize while keeping aspect ratio
+    # Force portrait aspect ratio (taller than wide)
+    if img.width > img.height * 0.9:   # If not tall enough
+        img = img.rotate(180, expand=True)
+    
+    # Resize
     aspect_ratio = img.height / img.width
-    target_height = int(target_width * aspect_ratio)
+    target_height = int(target_width * aspect_ratio * 1.1)  # Slightly taller
     img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
     return img
 
@@ -159,10 +162,9 @@ if 'processed' not in st.session_state:
     st.session_state.processed = False
 
 if uploaded_file:
-    # Force portrait for uploaded image
     uploaded_img = Image.open(uploaded_file).convert('RGB')
-    portrait_img = force_portrait(uploaded_img, target_width=320)
-    st.image(portrait_img, caption="Your Scanned Card", width=320)
+    portrait_img = force_portrait(uploaded_img, target_width=300)
+    st.image(portrait_img, caption="Your Scanned Card", width=300)
 
     if st.button("🔍 Process with AI", type="primary", use_container_width=True):
         with st.spinner("AI analyzing card..."):
@@ -195,10 +197,10 @@ if uploaded_file:
                 try:
                     resp = requests.get(image_url, timeout=10)
                     match_img = Image.open(BytesIO(resp.content)).convert('RGB')
-                    portrait_match = force_portrait(match_img, target_width=320)
-                    st.image(portrait_match, caption=f"{card_name} ({similarity}%)", width=320)
+                    portrait_match = force_portrait(match_img, target_width=300)
+                    st.image(portrait_match, caption=f"{card_name} ({similarity}%)", width=300)
                 except:
-                    st.image(image_url, caption=f"{card_name} ({similarity}%)", width=320)
+                    st.image(image_url, caption=f"{card_name} ({similarity}%)", width=300)
 
                 col1, col2 = st.columns([4, 1])
                 with col2:
