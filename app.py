@@ -51,11 +51,13 @@ def display_portrait_image(image, caption="Your Card"):
 def save_card(pil_image, player_name, year, brand, card_number, brand_detail):
     """Upload image to Cloudinary and save card details to database"""
     try:
-        # Upload image to Cloudinary
+        # Prepare image buffer (important: give it a name)
         buffer = BytesIO()
-        pil_image.save(buffer, format="JPEG")
+        pil_image.save(buffer, format="JPEG", quality=90)
         buffer.seek(0)
-        
+        buffer.name = "card.jpg"          # ← this line often prevents upload problems
+
+        # Upload
         upload_result = cloudinary.uploader.upload(
             buffer,
             folder="sports_cards",
@@ -63,11 +65,12 @@ def save_card(pil_image, player_name, year, brand, card_number, brand_detail):
         )
         image_url = upload_result.get("secure_url")
 
-        # Build a simple card name for display
+        # Build display name
         card_name = f"{year} {brand} {player_name} #{card_number}"
         if brand_detail:
             card_name += f" ({brand_detail})"
 
+        # Save to database
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -90,10 +93,13 @@ def save_card(pil_image, player_name, year, brand, card_number, brand_detail):
         cur.close()
         conn.close()
         return new_id, card_name, image_url
-    except Exception as e:
-        st.error(f"Error saving card: {e}")
-        return None, None, None
 
+    except Exception as e:
+        # Print the full error so we can see exactly what Cloudinary says
+        st.error(f"Error saving card: {str(e)}")
+        print("Full Cloudinary / DB error:", e)   # also shows in terminal
+        return None, None, None
+        
 # ===================== MAIN UI =====================
 st.title("🏟️ Sports Card Scanner")
 st.caption("Take a photo of your card and enter the details")
