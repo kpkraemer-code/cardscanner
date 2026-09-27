@@ -24,6 +24,11 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
 
+# Temporary debug – remove after fixing
+st.write("Cloud name loaded:", bool(os.getenv("CLOUDINARY_CLOUD_NAME")))
+st.write("API Key loaded:", bool(os.getenv("CLOUDINARY_API_KEY")))
+st.write("API Secret loaded:", bool(os.getenv("CLOUDINARY_API_SECRET")))
+
 def get_db_connection():
     database_url = os.getenv("DATABASE_URL")
     if database_url:
@@ -39,38 +44,42 @@ def get_db_connection():
     st.error("DATABASE_URL not found")
     st.stop()
 
-def display_portrait_image(image, caption="Your Card"):
-    """Display uploaded image nicely"""
-    st.markdown(f"""
-        <div style="text-align: center; margin: 15px 0;">
-            <p style="margin-bottom: 8px; font-size: 15px;">{caption}</p>
-        </div>
-    """, unsafe_allow_html=True)
-    st.image(image, width=300)
+def fix_orientation(image):
+    """Fix upside-down phone photos"""
+    img = image.copy()
+    if img.width > img.height:  # If landscape
+        img = img.rotate(180, expand=True)
+    return img
 
-def save_card(pil_image, player_name, year, brand, card_number, brand_detail):
-    """Upload image to Cloudinary and save card details to database"""
+def upload_to_cloudinary(pil_image):
     try:
-        # Prepare image buffer
         buffer = BytesIO()
-        pil_image.save(buffer, format="JPEG", quality=90)
+        pil_image.save(buffer, format="JPEG", quality=85, optimize=True)
         buffer.seek(0)
         buffer.name = "card.jpg"
 
-        # Upload to Cloudinary (unchanged working logic)
-        upload_result = cloudinary.uploader.upload(
+        result = cloudinary.uploader.unsigned_upload(
             buffer,
+            upload_preset=os.getenv("CLOUDINARY_UPLOAD_PRESET"),
             folder="sports_cards",
+            public_id=f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             resource_type="image"
         )
-        image_url = upload_result.get("secure_url")
+        return result.get("secure_url")
+    except Exception as e:
+        st.error(f"Upload failed: {e}")
+        return None
 
-        # Build a readable card name
+def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_detail):
+    try:
+        image_url = upload_to_cloudinary(pil_image)
+        if not image_url:
+            return None
+
         card_name = f"{year} {brand} {player_name} #{card_number}"
         if brand_detail:
             card_name += f" ({brand_detail})"
 
-        # Insert into database
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -93,7 +102,6 @@ def save_card(pil_image, player_name, year, brand, card_number, brand_detail):
         cur.close()
         conn.close()
         return new_id, card_name, image_url
-
     except Exception as e:
         st.error(f"Error saving card: {e}")
         return None, None, None
@@ -105,8 +113,10 @@ st.caption("Take a photo of your card and enter the details")
 uploaded_file = st.file_uploader("Take photo or upload card image", type=['jpg', 'jpeg', 'png'])
 
 if uploaded_file:
-    pil_image = Image.open(uploaded_file).convert('RGB')
-    display_portrait_image(pil_image, "Your Scanned Card")
+    # Fix orientation and show image
+    uploaded_img = Image.open(uploaded_file).convert('RGB')
+    fixed_img = fix_orientation(uploaded_img)
+    st.image(fixed_img, caption="Your Scanned Card", width=320)
 
     st.subheader("Enter Card Details")
 
@@ -121,10 +131,24 @@ if uploaded_file:
             st.warning("Please fill in Player Name, Year, Brand, and Card Number.")
         else:
             with st.spinner("Saving card..."):
-                new_id, card_name, image_url = save_card(
-                    pil_image, player_name, year, brand, card_number, brand_detail
+                result = save_as_new_card(
+                    fixed_img, player_name, year, brand, card_number, brand_detail
                 )
-                if new_id:
+                if result:
+                    new_id, card_name, image_url = result
                     st.success(f"✅ Saved: **{card_name}** (ID: {new_id})")
                     if image_url:
                         st.markdown(f"[View uploaded image]({image_url})")
+                    st.balloons()
+
+# Sidebar
+with st.sidebar:
+    st.header("Quick Stats")
+    if st.button("Show Inventory"):
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM sports_cards")
+        total = cur.fetchone()[0]
+        st.write(f"Total Cards: **{total}**")
+        cur.close()
+        conn.close()
