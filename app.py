@@ -23,6 +23,10 @@ cloudinary.config(
     api_key=os.getenv("CLOUDINARY_API_KEY"),
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
+# Temporary debug – remove after fixing
+st.write("Cloud name loaded:", bool(os.getenv("CLOUDINARY_CLOUD_NAME")))
+st.write("API Key loaded:", bool(os.getenv("CLOUDINARY_API_KEY")))
+st.write("API Secret loaded:", bool(os.getenv("CLOUDINARY_API_SECRET")))
 
 def get_db_connection():
     database_url = os.getenv("DATABASE_URL")
