@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import cloudinary
 import cloudinary.uploader
 from io import BytesIO
+import requests
 
 st.set_page_config(page_title="Sports Card Scanner", layout="centered")
 
@@ -47,7 +48,7 @@ def get_db_connection():
 def fix_orientation(image):
     """Fix upside-down phone photos"""
     img = image.copy()
-    if img.width > img.height:  # If landscape
+    if img.width > img.height:
         img = img.rotate(180, expand=True)
     return img
 
@@ -91,7 +92,7 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
             card_name,
             player_name,
             year,
-            brand,                    # goes into set_name column
+            brand,
             card_number,
             brand_detail or None,
             image_url,
@@ -106,6 +107,44 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
     except Exception as e:
         st.error(f"Error saving card: {e}")
         return None, None, None
+
+def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available):
+    """Update an existing card record"""
+    try:
+        # Rebuild card_name for consistency
+        card_name = f"{year} {set_name} {player} #{card_number}"
+        if brand_detail:
+            card_name += f" ({brand_detail})"
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE sports_cards
+            SET card_name = %s,
+                player = %s,
+                year = %s,
+                set_name = %s,
+                card_number = %s,
+                brand_detail = %s,
+                qty_available = %s
+            WHERE id = %s
+        """, (
+            card_name,
+            player,
+            year,
+            set_name,
+            card_number,
+            brand_detail or None,
+            qty_available,
+            card_id
+        ))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Error updating card: {e}")
+        return False
 
 @st.cache_data(ttl=60)
 def get_distinct_years():
@@ -213,118 +252,72 @@ with tab1:
 
 # -------------------- TAB 2: BROWSE CARDS --------------------
 with tab2:
-    st.subheader("Browse Cards by Year & Set")
-
-    years = ["All Years"] + get_distinct_years() if 'get_distinct_years' in globals() else ["All Years"]
-    # Rebuild helper functions cleanly
-    @st.cache_data(ttl=60)
-    def get_distinct_years():
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT year FROM sports_cards WHERE year IS NOT NULL ORDER BY year DESC")
-            years = [str(row[0]) for row in cur.fetchall()]
-            cur.close()
-            conn.close()
-            return years
-        except:
-            return []
-
-    @st.cache_data(ttl=60)
-    def get_distinct_sets(year=None):
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            if year and year != "All Years":
-                cur.execute(
-                    "SELECT DISTINCT set_name FROM sports_cards WHERE year = %s AND set_name IS NOT NULL ORDER BY set_name",
-                    (year,)
-                )
-            else:
-                cur.execute("SELECT DISTINCT set_name FROM sports_cards WHERE set_name IS NOT NULL ORDER BY set_name")
-            sets = [row[0] for row in cur.fetchall()]
-            cur.close()
-            conn.close()
-            return sets
-        except:
-            return []
-
-    def get_cards(year=None, set_name=None):
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-
-            query = """
-                SELECT id, card_name, player, year, set_name, card_number,
-                       brand_detail, image_url, qty_available, created_at
-                FROM sports_cards
-                WHERE 1=1
-            """
-            params = []
-
-            if year and year != "All Years":
-                query += " AND year = %s"
-                params.append(year)
-            if set_name and set_name != "All Sets":
-                query += " AND set_name = %s"
-                params.append(set_name)
-
-            query += " ORDER BY player, card_number"
-
-            cur.execute(query, params)
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
-            return rows
-        except Exception as e:
-            st.error(f"Error loading cards: {e}")
-            return []
+    st.subheader("Browse & Edit Cards")
 
     years = ["All Years"] + get_distinct_years()
-    selected_year = st.selectbox("Select Year", years)
+    selected_year = st.selectbox("Select Year", years, key="browse_year")
 
     sets = ["All Sets"] + get_distinct_sets(selected_year)
-    selected_set = st.selectbox("Select Set Name", sets)
+    selected_set = st.selectbox("Select Set Name", sets, key="browse_set")
 
     if st.button("🔍 Load Cards", type="primary"):
-        cards = get_cards(selected_year, selected_set)
+        st.session_state.loaded_cards = get_cards(selected_year, selected_set)
 
-        if not cards:
-            st.info("No cards found for the selected filters.")
-        else:
-            st.success(f"Found **{len(cards)}** card(s)")
+    if "loaded_cards" in st.session_state and st.session_state.loaded_cards:
+        cards = st.session_state.loaded_cards
+        st.success(f"Found **{len(cards)}** card(s)")
 
-            for card in cards:
-                (card_id, card_name, player, year, set_name,
-                 card_number, brand_detail, image_url, qty, created_at) = card
+        for card in cards:
+            (card_id, card_name, player, year, set_name,
+             card_number, brand_detail, image_url, qty, created_at) = card
 
-                with st.container():
-                    col1, col2 = st.columns([1, 2])
+            with st.container():
+                col1, col2 = st.columns([1, 2])
 
-                    with col1:
-                        if image_url:
-                            # Rotate 90 degrees to the left (counter-clockwise)
-                            try:
-                                img = Image.open(requests.get(image_url, stream=True).raw)
-                                rotated = img.rotate(90, expand=True)
-                                st.image(rotated, width=220)
-                            except Exception:
-                                st.image(image_url, width=220)
-                        else:
-                            st.write("No image")
+                with col1:
+                    if image_url:
+                        try:
+                            response = requests.get(image_url, stream=True, timeout=10)
+                            img = Image.open(response.raw).convert("RGB")
+                            # Rotate 90 degrees counter-clockwise (to the left)
+                            rotated = img.rotate(90, expand=True)
+                            st.image(rotated, width=220)
+                        except Exception:
+                            st.image(image_url, width=220)
+                    else:
+                        st.write("No image")
 
-                    with col2:
-                        st.markdown(f"### {card_name}")
-                        st.write(f"**Player:** {player}")
-                        st.write(f"**Year:** {year}")
-                        st.write(f"**Set:** {set_name}")
-                        st.write(f"**Card #:** {card_number}")
-                        if brand_detail:
-                            st.write(f"**Detail:** {brand_detail}")
-                        st.write(f"**Qty Available:** {qty}")
-                        st.caption(f"ID: {card_id} • Added: {created_at}")
+                with col2:
+                    st.markdown(f"#### Card ID: {card_id}")
 
-                    st.divider()
+                    new_player = st.text_input("Player", value=player or "", key=f"player_{card_id}")
+                    new_year = st.text_input("Year", value=str(year) if year else "", key=f"year_{card_id}")
+                    new_set = st.text_input("Set", value=set_name or "", key=f"set_{card_id}")
+                    new_number = st.text_input("Card #", value=str(card_number) if card_number else "", key=f"num_{card_id}")
+                    new_detail = st.text_input("Detail", value=brand_detail or "", key=f"detail_{card_id}")
+                    new_qty = st.number_input("Qty Available", min_value=0, value=int(qty or 1), step=1, key=f"qty_{card_id}")
+
+                    if st.button("💾 Update Card", key=f"update_{card_id}", type="primary"):
+                        success = update_card(
+                            card_id,
+                            new_player,
+                            new_year,
+                            new_set,
+                            new_number,
+                            new_detail,
+                            new_qty
+                        )
+                        if success:
+                            st.success(f"✅ Card {card_id} updated successfully!")
+                            st.cache_data.clear()
+                            # Refresh the loaded list
+                            st.session_state.loaded_cards = get_cards(selected_year, selected_set)
+                            st.rerun()
+
+                st.divider()
+
+    elif "loaded_cards" in st.session_state:
+        st.info("No cards found for the selected filters.")
 
 # Sidebar
 with st.sidebar:
