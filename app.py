@@ -84,7 +84,7 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO sports_cards 
-            (card_name, player_name, year, brand, card_number, brand_detail, image_url, qty_available, created_at)
+            (card_name, player, year, set_name, card_number, brand_detail, image_url, qty_available, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (
