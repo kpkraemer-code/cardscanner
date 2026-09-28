@@ -70,7 +70,7 @@ def upload_to_cloudinary(pil_image):
         st.error(f"Upload failed: {e}")
         return None
 
-def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_detail):
+def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_detail, qty_available):
     try:
         image_url = upload_to_cloudinary(pil_image)
         if not image_url:
@@ -84,8 +84,8 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO sports_cards 
-            (card_name, player, year, set_name, card_number, brand_detail, image_path, qty_available, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s)
+            (card_name, player_name, year, brand, card_number, brand_detail, image_url, qty_available, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (
             card_name,
@@ -95,6 +95,7 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
             card_number,
             brand_detail or None,
             image_url,
+            qty_available,
             datetime.utcnow()
         ))
         new_id = cur.fetchone()[0]
@@ -125,6 +126,7 @@ if uploaded_file:
     brand = st.text_input("Brand", placeholder="e.g. Fleer")
     card_number = st.text_input("Card Number", placeholder="e.g. 57")
     brand_detail = st.text_input("Brand Detail (optional)", placeholder="e.g. Rookie, Refractor, Parallel...")
+    qty_available = st.number_input("Qty Available", min_value=1, value=1, step=1)
 
     if st.button("💾 Save Card", type="primary", use_container_width=True):
         if not player_name or not year or not brand or not card_number:
@@ -132,7 +134,7 @@ if uploaded_file:
         else:
             with st.spinner("Saving card..."):
                 result = save_as_new_card(
-                    fixed_img, player_name, year, brand, card_number, brand_detail
+                    fixed_img, player_name, year, brand, card_number, brand_detail, qty_available
                 )
                 if result:
                     new_id, card_name, image_url = result
