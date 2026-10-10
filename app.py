@@ -178,7 +178,31 @@ def get_distinct_sets(year=None):
     except:
         return []
 
-def get_cards(year=None, set_name=None):
+@st.cache_data(ttl=60)
+def get_distinct_players(year=None, set_name=None):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        query = "SELECT DISTINCT player FROM sports_cards WHERE player IS NOT NULL"
+        params = []
+
+        if year and year != "All Years":
+            query += " AND year = %s"
+            params.append(year)
+        if set_name and set_name != "All Sets":
+            query += " AND set_name = %s"
+            params.append(set_name)
+
+        query += " ORDER BY player"
+        cur.execute(query, params)
+        players = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return players
+    except:
+        return []
+
+def get_cards(year=None, set_name=None, player=None, card_number=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -197,6 +221,12 @@ def get_cards(year=None, set_name=None):
         if set_name and set_name != "All Sets":
             query += " AND set_name = %s"
             params.append(set_name)
+        if player and player != "All Players":
+            query += " AND player = %s"
+            params.append(player)
+        if card_number and card_number.strip():
+            query += " AND card_number = %s"
+            params.append(card_number.strip())
 
         query += " ORDER BY player, card_number"
 
@@ -254,14 +284,29 @@ with tab1:
 with tab2:
     st.subheader("Browse & Edit Cards")
 
+    # Filters
     years = ["All Years"] + get_distinct_years()
     selected_year = st.selectbox("Select Year", years, key="browse_year")
 
     sets = ["All Sets"] + get_distinct_sets(selected_year)
     selected_set = st.selectbox("Select Set Name", sets, key="browse_set")
 
+    players = ["All Players"] + get_distinct_players(selected_year, selected_set)
+    selected_player = st.selectbox("Select Player Name", players, key="browse_player")
+
+    card_number_filter = st.text_input(
+        "Card Number",
+        placeholder="e.g. 57 (leave blank for all)",
+        key="browse_card_number"
+    )
+
     if st.button("🔍 Load Cards", type="primary"):
-        st.session_state.loaded_cards = get_cards(selected_year, selected_set)
+        st.session_state.loaded_cards = get_cards(
+            selected_year,
+            selected_set,
+            selected_player,
+            card_number_filter
+        )
 
     if "loaded_cards" in st.session_state and st.session_state.loaded_cards:
         cards = st.session_state.loaded_cards
@@ -310,8 +355,13 @@ with tab2:
                         if success:
                             st.success(f"✅ Card {card_id} updated successfully!")
                             st.cache_data.clear()
-                            # Refresh the loaded list
-                            st.session_state.loaded_cards = get_cards(selected_year, selected_set)
+                            # Refresh the loaded list with current filters
+                            st.session_state.loaded_cards = get_cards(
+                                selected_year,
+                                selected_set,
+                                selected_player,
+                                card_number_filter
+                            )
                             st.rerun()
 
                 st.divider()
