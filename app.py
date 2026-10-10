@@ -146,6 +146,20 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
         st.error(f"Error updating card: {e}")
         return False
 
+def delete_card(card_id):
+    """Delete a single card record by ID"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sports_cards WHERE id = %s", (card_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting card: {e}")
+        return False
+
 @st.cache_data(ttl=60)
 def get_distinct_years():
     try:
@@ -342,27 +356,44 @@ with tab2:
                     new_detail = st.text_input("Detail", value=brand_detail or "", key=f"detail_{card_id}")
                     new_qty = st.number_input("Qty Available", min_value=0, value=int(qty or 1), step=1, key=f"qty_{card_id}")
 
-                    if st.button("💾 Update Card", key=f"update_{card_id}", type="primary"):
-                        success = update_card(
-                            card_id,
-                            new_player,
-                            new_year,
-                            new_set,
-                            new_number,
-                            new_detail,
-                            new_qty
-                        )
-                        if success:
-                            st.success(f"✅ Card {card_id} updated successfully!")
-                            st.cache_data.clear()
-                            # Refresh the loaded list with current filters
-                            st.session_state.loaded_cards = get_cards(
-                                selected_year,
-                                selected_set,
-                                selected_player,
-                                card_number_filter
+                    # Buttons side by side
+                    btn_col1, btn_col2 = st.columns(2)
+                    with btn_col1:
+                        if st.button("💾 Update Card", key=f"update_{card_id}", type="primary", use_container_width=True):
+                            success = update_card(
+                                card_id,
+                                new_player,
+                                new_year,
+                                new_set,
+                                new_number,
+                                new_detail,
+                                new_qty
                             )
-                            st.rerun()
+                            if success:
+                                st.success(f"✅ Card {card_id} updated successfully!")
+                                st.cache_data.clear()
+                                # Refresh the loaded list with current filters
+                                st.session_state.loaded_cards = get_cards(
+                                    selected_year,
+                                    selected_set,
+                                    selected_player,
+                                    card_number_filter
+                                )
+                                st.rerun()
+
+                    with btn_col2:
+                        if st.button("🗑️ Delete Card", key=f"delete_{card_id}", type="secondary", use_container_width=True):
+                            if delete_card(card_id):
+                                st.success(f"✅ Card {card_id} deleted successfully!")
+                                st.cache_data.clear()
+                                # Refresh the loaded list with current filters
+                                st.session_state.loaded_cards = get_cards(
+                                    selected_year,
+                                    selected_set,
+                                    selected_player,
+                                    card_number_filter
+                                )
+                                st.rerun()
 
                 st.divider()
 
