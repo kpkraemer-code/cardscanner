@@ -11,9 +11,21 @@ st.set_page_config(
     layout="wide"
 )
 
-# Hide Streamlit menu/footer + center images on mobile
+# Black background + hide Streamlit UI + center images on mobile
 st.markdown("""
     <style>
+    /* Black background */
+    .stApp {
+        background-color: #000000;
+        color: #ffffff;
+    }
+    
+    /* Make text readable on black */
+    h1, h2, h3, h4, h5, h6, p, span, label, .stMarkdown {
+        color: #ffffff !important;
+    }
+    
+    /* Hide Streamlit menu/footer */
     .stDeployButton, div[data-testid="stToolbar"], footer {display: none !important;}
     
     /* Center images on mobile */
@@ -25,6 +37,11 @@ st.markdown("""
         div[data-testid="stImage"] img {
             margin: 0 auto !important;
         }
+    }
+    
+    /* Optional: make selectboxes and inputs look better on black */
+    .stSelectbox, .stTextInput, .stNumberInput {
+        background-color: #1a1a1a;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -125,7 +142,7 @@ def get_cards(year=None, set_name=None, player=None, card_number=None):
             query += " AND card_number = %s"
             params.append(card_number.strip())
 
-        # Sort by set_name ascending, then player, then card_number
+        # Sort by set_name ascending
         query += " ORDER BY set_name ASC, player ASC, card_number ASC"
 
         cur.execute(query, params)
