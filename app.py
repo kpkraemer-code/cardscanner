@@ -85,8 +85,8 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO sports_cards 
-            (card_name, player, year, set_name, card_number, brand_detail, image_url, qty_available, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (card_name, player, year, set_name, card_number, brand_detail, image_url, qty_available, created_at, orientation)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (
             card_name,
@@ -97,7 +97,8 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
             brand_detail or None,
             image_url,
             qty_available,
-            datetime.utcnow()
+            datetime.utcnow(),
+            90  # default orientation
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
@@ -108,10 +109,9 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
         st.error(f"Error saving card: {e}")
         return None, None, None
 
-def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available):
-    """Update an existing card record"""
+def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available, orientation):
+    """Update an existing card record including orientation"""
     try:
-        # Rebuild card_name for consistency
         card_name = f"{year} {set_name} {player} #{card_number}"
         if brand_detail:
             card_name += f" ({brand_detail})"
@@ -126,7 +126,8 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
                 set_name = %s,
                 card_number = %s,
                 brand_detail = %s,
-                qty_available = %s
+                qty_available = %s,
+                orientation = %s
             WHERE id = %s
         """, (
             card_name,
@@ -136,6 +137,7 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
             card_number,
             brand_detail or None,
             qty_available,
+            orientation,
             card_id
         ))
         conn.commit()
@@ -223,7 +225,7 @@ def get_cards(year=None, set_name=None, player=None, card_number=None):
 
         query = """
             SELECT id, card_name, player, year, set_name, card_number,
-                   brand_detail, image_url, qty_available, created_at
+                   brand_detail, image_url, qty_available, created_at, orientation
             FROM sports_cards
             WHERE 1=1
         """
@@ -328,23 +330,13 @@ with tab2:
 
         for card in cards:
             (card_id, card_name, player, year, set_name,
-             card_number, brand_detail, image_url, qty, created_at) = card
+             card_number, brand_detail, image_url, qty, created_at, orientation) = card
+
+            # Default if null
+            current_orientation = orientation if orientation is not None else 90
 
             with st.container():
                 col1, col2 = st.columns([1, 2])
-
-                with col1:
-                    if image_url:
-                        try:
-                            response = requests.get(image_url, stream=True, timeout=10)
-                            img = Image.open(response.raw).convert("RGB")
-                            # Rotate 90 degrees counter-clockwise (to the left)
-                            rotated = img.rotate(90, expand=True)
-                            st.image(rotated, width=220)
-                        except Exception:
-                            st.image(image_url, width=220)
-                    else:
-                        st.write("No image")
 
                 with col2:
                     st.markdown(f"#### Card ID: {card_id}")
@@ -356,44 +348,66 @@ with tab2:
                     new_detail = st.text_input("Detail", value=brand_detail or "", key=f"detail_{card_id}")
                     new_qty = st.number_input("Qty Available", min_value=0, value=int(qty or 1), step=1, key=f"qty_{card_id}")
 
-                    # Buttons side by side
-                    btn_col1, btn_col2 = st.columns(2)
-                    with btn_col1:
-                        if st.button("💾 Update Card", key=f"update_{card_id}", type="primary", use_container_width=True):
-                            success = update_card(
-                                card_id,
-                                new_player,
-                                new_year,
-                                new_set,
-                                new_number,
-                                new_detail,
-                                new_qty
-                            )
-                            if success:
-                                st.success(f"✅ Card {card_id} updated successfully!")
-                                st.cache_data.clear()
-                                # Refresh the loaded list with current filters
-                                st.session_state.loaded_cards = get_cards(
-                                    selected_year,
-                                    selected_set,
-                                    selected_player,
-                                    card_number_filter
-                                )
-                                st.rerun()
+                    # Orientation selector with live preview
+                    new_orientation = st.selectbox(
+                        "Image Orientation",
+                        options=[0, 90, 180, 270],
+                        index=[0, 90, 180, 270].index(current_orientation) if current_orientation in [0, 90, 180, 270] else 1,
+                        key=f"orient_{card_id}",
+                        help="0 = normal, 90 = rotate left, 180 = upside down, 270 = rotate right"
+                    )
 
-                    with btn_col2:
-                        if st.button("🗑️ Delete Card", key=f"delete_{card_id}", type="secondary", use_container_width=True):
-                            if delete_card(card_id):
-                                st.success(f"✅ Card {card_id} deleted successfully!")
-                                st.cache_data.clear()
-                                # Refresh the loaded list with current filters
-                                st.session_state.loaded_cards = get_cards(
-                                    selected_year,
-                                    selected_set,
-                                    selected_player,
-                                    card_number_filter
-                                )
-                                st.rerun()
+                with col1:
+                    if image_url:
+                        try:
+                            response = requests.get(image_url, stream=True, timeout=10)
+                            img = Image.open(response.raw).convert("RGB")
+
+                            # Live preview using the current selectbox value
+                            rotated = img.rotate(new_orientation, expand=True)
+                            st.image(rotated, width=220, caption=f"Preview: {new_orientation}°")
+                        except Exception:
+                            st.image(image_url, width=220)
+                    else:
+                        st.write("No image")
+
+                # Buttons side by side
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    if st.button("💾 Update Card", key=f"update_{card_id}", type="primary", use_container_width=True):
+                        success = update_card(
+                            card_id,
+                            new_player,
+                            new_year,
+                            new_set,
+                            new_number,
+                            new_detail,
+                            new_qty,
+                            new_orientation
+                        )
+                        if success:
+                            st.success(f"✅ Card {card_id} updated successfully!")
+                            st.cache_data.clear()
+                            st.session_state.loaded_cards = get_cards(
+                                selected_year,
+                                selected_set,
+                                selected_player,
+                                card_number_filter
+                            )
+                            st.rerun()
+
+                with btn_col2:
+                    if st.button("🗑️ Delete Card", key=f"delete_{card_id}", type="secondary", use_container_width=True):
+                        if delete_card(card_id):
+                            st.success(f"✅ Card {card_id} deleted successfully!")
+                            st.cache_data.clear()
+                            st.session_state.loaded_cards = get_cards(
+                                selected_year,
+                                selected_set,
+                                selected_player,
+                                card_number_filter
+                            )
+                            st.rerun()
 
                 st.divider()
 
