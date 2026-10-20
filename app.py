@@ -221,7 +221,7 @@ def get_distinct_players(year=None, set_name=None):
     except:
         return []
 
-def get_cards(year=None, set_name=None, player=None, card_number=None):
+def get_cards(year=None, set_name=None, player=None, card_number=None, sort_by="player"):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -247,7 +247,11 @@ def get_cards(year=None, set_name=None, player=None, card_number=None):
             query += " AND card_number = %s"
             params.append(card_number.strip())
 
-        query += " ORDER BY player, card_number"
+        # Sorting options
+        if sort_by == "qty_desc":
+            query += " ORDER BY qty_available DESC NULLS LAST, player ASC, card_number ASC"
+        else:
+            query += " ORDER BY player ASC, card_number ASC"
 
         cur.execute(query, params)
         rows = cur.fetchall()
@@ -319,12 +323,22 @@ with tab2:
         key="browse_card_number"
     )
 
+    # Sort option
+    sort_option = st.selectbox(
+        "Sort by",
+        options=["Player (A-Z)", "Quantity (High → Low)"],
+        key="browse_sort"
+    )
+
+    sort_by = "qty_desc" if sort_option == "Quantity (High → Low)" else "player"
+
     if st.button("🔍 Load Cards", type="primary"):
         st.session_state.loaded_cards = get_cards(
             selected_year,
             selected_set,
             selected_player,
-            card_number_filter
+            card_number_filter,
+            sort_by=sort_by
         )
 
     if "loaded_cards" in st.session_state and st.session_state.loaded_cards:
@@ -404,7 +418,8 @@ with tab2:
                                 selected_year,
                                 selected_set,
                                 selected_player,
-                                card_number_filter
+                                card_number_filter,
+                                sort_by=sort_by
                             )
                             st.rerun()
 
@@ -417,7 +432,8 @@ with tab2:
                                 selected_year,
                                 selected_set,
                                 selected_player,
-                                card_number_filter
+                                card_number_filter,
+                                sort_by=sort_by
                             )
                             st.rerun()
 
