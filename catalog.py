@@ -11,10 +11,21 @@ st.set_page_config(
     layout="wide"
 )
 
-# Hide Streamlit menu/footer
+# Hide Streamlit menu/footer + center images on mobile
 st.markdown("""
     <style>
     .stDeployButton, div[data-testid="stToolbar"], footer {display: none !important;}
+    
+    /* Center images on mobile */
+    @media (max-width: 768px) {
+        div[data-testid="stImage"] {
+            display: flex !important;
+            justify-content: center !important;
+        }
+        div[data-testid="stImage"] img {
+            margin: 0 auto !important;
+        }
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -30,7 +41,7 @@ def get_db_connection():
             port=result.port,
             sslmode="require"
         )
-    st.error("DATABASE_URL not found - BUMMER!")
+    st.error("DATABASE_URL not found")
     st.stop()
 
 @st.cache_data(ttl=120)
@@ -114,7 +125,8 @@ def get_cards(year=None, set_name=None, player=None, card_number=None):
             query += " AND card_number = %s"
             params.append(card_number.strip())
 
-        query += " ORDER BY player, year, card_number"
+        # Sort by set_name ascending, then player, then card_number
+        query += " ORDER BY set_name ASC, player ASC, card_number ASC"
 
         cur.execute(query, params)
         rows = cur.fetchall()
