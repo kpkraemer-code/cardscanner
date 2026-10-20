@@ -30,7 +30,7 @@ def get_db_connection():
             port=result.port,
             sslmode="require"
         )
-    st.error("DATABASE_URL not found")
+    st.error("DATABASE_URL not found - BUMMER!")
     st.stop()
 
 @st.cache_data(ttl=120)
