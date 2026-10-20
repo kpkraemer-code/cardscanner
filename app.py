@@ -85,8 +85,8 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO sports_cards 
-            (card_name, player, year, set_name, card_number, brand_detail, image_url, qty_available, created_at, orientation)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (card_name, player, year, set_name, card_number, brand_detail, image_url, qty_available, created_at, orientation, price)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
         """, (
             card_name,
@@ -98,7 +98,8 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
             image_url,
             qty_available,
             datetime.utcnow(),
-            90  # default orientation
+            90,      # default orientation
+            None     # default price
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
@@ -109,8 +110,8 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
         st.error(f"Error saving card: {e}")
         return None, None, None
 
-def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available, orientation):
-    """Update an existing card record including orientation"""
+def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available, orientation, price):
+    """Update an existing card record including orientation and price"""
     try:
         card_name = f"{year} {set_name} {player} #{card_number}"
         if brand_detail:
@@ -127,7 +128,8 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
                 card_number = %s,
                 brand_detail = %s,
                 qty_available = %s,
-                orientation = %s
+                orientation = %s,
+                price = %s
             WHERE id = %s
         """, (
             card_name,
@@ -138,6 +140,7 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
             brand_detail or None,
             qty_available,
             orientation,
+            price,
             card_id
         ))
         conn.commit()
@@ -225,7 +228,7 @@ def get_cards(year=None, set_name=None, player=None, card_number=None):
 
         query = """
             SELECT id, card_name, player, year, set_name, card_number,
-                   brand_detail, image_url, qty_available, created_at, orientation
+                   brand_detail, image_url, qty_available, created_at, orientation, price
             FROM sports_cards
             WHERE 1=1
         """
@@ -330,10 +333,11 @@ with tab2:
 
         for card in cards:
             (card_id, card_name, player, year, set_name,
-             card_number, brand_detail, image_url, qty, created_at, orientation) = card
+             card_number, brand_detail, image_url, qty, created_at, orientation, price) = card
 
-            # Default if null
+            # Defaults
             current_orientation = orientation if orientation is not None else 90
+            current_price = float(price) if price is not None else 0.00
 
             with st.container():
                 col1, col2 = st.columns([1, 2])
@@ -347,6 +351,15 @@ with tab2:
                     new_number = st.text_input("Card #", value=str(card_number) if card_number else "", key=f"num_{card_id}")
                     new_detail = st.text_input("Detail", value=brand_detail or "", key=f"detail_{card_id}")
                     new_qty = st.number_input("Qty Available", min_value=0, value=int(qty or 1), step=1, key=f"qty_{card_id}")
+
+                    new_price = st.number_input(
+                        "Price ($)",
+                        min_value=0.00,
+                        value=current_price,
+                        step=0.01,
+                        format="%.2f",
+                        key=f"price_{card_id}"
+                    )
 
                     # Orientation selector with live preview
                     new_orientation = st.selectbox(
@@ -362,8 +375,6 @@ with tab2:
                         try:
                             response = requests.get(image_url, stream=True, timeout=10)
                             img = Image.open(response.raw).convert("RGB")
-
-                            # Live preview using the current selectbox value
                             rotated = img.rotate(new_orientation, expand=True)
                             st.image(rotated, width=220, caption=f"Preview: {new_orientation}°")
                         except Exception:
@@ -371,7 +382,7 @@ with tab2:
                     else:
                         st.write("No image")
 
-                # Buttons side by side
+                # Buttons
                 btn_col1, btn_col2 = st.columns(2)
                 with btn_col1:
                     if st.button("💾 Update Card", key=f"update_{card_id}", type="primary", use_container_width=True):
@@ -383,7 +394,8 @@ with tab2:
                             new_number,
                             new_detail,
                             new_qty,
-                            new_orientation
+                            new_orientation,
+                            new_price
                         )
                         if success:
                             st.success(f"✅ Card {card_id} updated successfully!")
