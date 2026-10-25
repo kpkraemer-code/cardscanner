@@ -110,8 +110,8 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
         st.error(f"Error saving card: {e}")
         return None, None, None
 
-def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available, orientation, price):
-    """Update an existing card record including orientation and price"""
+def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available, orientation, price, image_url=None):
+    """Update an existing card record including orientation, price, and optionally the image"""
     try:
         card_name = f"{year} {set_name} {player} #{card_number}"
         if brand_detail:
@@ -119,30 +119,62 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
 
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
-            UPDATE sports_cards
-            SET card_name = %s,
-                player = %s,
-                year = %s,
-                set_name = %s,
-                card_number = %s,
-                brand_detail = %s,
-                qty_available = %s,
-                orientation = %s,
-                price = %s
-            WHERE id = %s
-        """, (
-            card_name,
-            player,
-            year,
-            set_name,
-            card_number,
-            brand_detail or None,
-            qty_available,
-            orientation,
-            price,
-            card_id
-        ))
+
+        if image_url:
+            # Update including new image
+            cur.execute("""
+                UPDATE sports_cards
+                SET card_name = %s,
+                    player = %s,
+                    year = %s,
+                    set_name = %s,
+                    card_number = %s,
+                    brand_detail = %s,
+                    qty_available = %s,
+                    orientation = %s,
+                    price = %s,
+                    image_url = %s
+                WHERE id = %s
+            """, (
+                card_name,
+                player,
+                year,
+                set_name,
+                card_number,
+                brand_detail or None,
+                qty_available,
+                orientation,
+                price,
+                image_url,
+                card_id
+            ))
+        else:
+            # Update without changing image
+            cur.execute("""
+                UPDATE sports_cards
+                SET card_name = %s,
+                    player = %s,
+                    year = %s,
+                    set_name = %s,
+                    card_number = %s,
+                    brand_detail = %s,
+                    qty_available = %s,
+                    orientation = %s,
+                    price = %s
+                WHERE id = %s
+            """, (
+                card_name,
+                player,
+                year,
+                set_name,
+                card_number,
+                brand_detail or None,
+                qty_available,
+                orientation,
+                price,
+                card_id
+            ))
+
         conn.commit()
         cur.close()
         conn.close()
@@ -384,13 +416,31 @@ with tab2:
                         help="0 = normal, 90 = rotate left, 180 = upside down, 270 = rotate right"
                     )
 
+                    # NEW: Image update uploader
+                    new_image_file = st.file_uploader(
+                        "Update Image (optional – leave empty to keep current)",
+                        type=['jpg', 'jpeg', 'png'],
+                        key=f"img_upload_{card_id}"
+                    )
+
                 with col1:
-                    if image_url:
+                    # Show current image (or newly selected one for preview)
+                    display_img = None
+                    if new_image_file:
+                        try:
+                            preview_img = Image.open(new_image_file).convert("RGB")
+                            preview_img = fix_orientation(preview_img)
+                            rotated = preview_img.rotate(new_orientation, expand=True)
+                            st.image(rotated, width=220, caption=f"New image preview: {new_orientation}°")
+                            display_img = "new"
+                        except Exception:
+                            st.write("Could not preview new image")
+                    elif image_url:
                         try:
                             response = requests.get(image_url, stream=True, timeout=10)
                             img = Image.open(response.raw).convert("RGB")
                             rotated = img.rotate(new_orientation, expand=True)
-                            st.image(rotated, width=220, caption=f"Preview: {new_orientation}°")
+                            st.image(rotated, width=220, caption=f"Current: {new_orientation}°")
                         except Exception:
                             st.image(image_url, width=220)
                     else:
@@ -400,6 +450,20 @@ with tab2:
                 btn_col1, btn_col2 = st.columns(2)
                 with btn_col1:
                     if st.button("💾 Update Card", key=f"update_{card_id}", type="primary", use_container_width=True):
+                        new_image_url = None
+
+                        # If a new image was uploaded, process and upload it
+                        if new_image_file:
+                            with st.spinner("Uploading new image..."):
+                                try:
+                                    uploaded_img = Image.open(new_image_file).convert("RGB")
+                                    fixed_img = fix_orientation(uploaded_img)
+                                    new_image_url = upload_to_cloudinary(fixed_img)
+                                    if not new_image_url:
+                                        st.error("Failed to upload new image. Other fields will still be updated.")
+                                except Exception as e:
+                                    st.error(f"Error processing new image: {e}")
+
                         success = update_card(
                             card_id,
                             new_player,
@@ -409,10 +473,14 @@ with tab2:
                             new_detail,
                             new_qty,
                             new_orientation,
-                            new_price
+                            new_price,
+                            image_url=new_image_url   # None if no new image
                         )
                         if success:
-                            st.success(f"✅ Card {card_id} updated successfully!")
+                            msg = f"✅ Card {card_id} updated successfully!"
+                            if new_image_url:
+                                msg += " (image replaced)"
+                            st.success(msg)
                             st.cache_data.clear()
                             st.session_state.loaded_cards = get_cards(
                                 selected_year,
