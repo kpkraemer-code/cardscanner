@@ -98,7 +98,7 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
             image_url,
             qty_available,
             datetime.utcnow(),
-            90,      # default orientation
+            0,      # default orientation
             None     # default price
         ))
         new_id = cur.fetchone()[0]
@@ -382,7 +382,7 @@ with tab2:
              card_number, brand_detail, image_url, qty, created_at, orientation, price) = card
 
             # Defaults
-            current_orientation = orientation if orientation is not None else 90
+            current_orientation = orientation if orientation is not None else 0
             current_price = float(price) if price is not None else 0.00
 
             with st.container():
