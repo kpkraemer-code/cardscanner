@@ -98,7 +98,7 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
             image_url,
             qty_available,
             datetime.utcnow(),
-            0,      # default orientation
+            90,      # default orientation
             None     # default price
         ))
         new_id = cur.fetchone()[0]
@@ -110,8 +110,9 @@ def save_as_new_card(pil_image, player_name, year, brand, card_number, brand_det
         st.error(f"Error saving card: {e}")
         return None, None, None
 
-def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available, orientation, price, image_url=None):
-    """Update an existing card record including orientation, price, and optionally the image"""
+def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_available,
+                orientation, price, thirty_count, ten_count, image_url=None):
+    """Update an existing card record including orientation, price, counts (varchar), and optionally the image"""
     try:
         card_name = f"{year} {set_name} {player} #{card_number}"
         if brand_detail:
@@ -121,7 +122,6 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
         cur = conn.cursor()
 
         if image_url:
-            # Update including new image
             cur.execute("""
                 UPDATE sports_cards
                 SET card_name = %s,
@@ -133,6 +133,8 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
                     qty_available = %s,
                     orientation = %s,
                     price = %s,
+                    thirty_count = %s,
+                    ten_count = %s,
                     image_url = %s
                 WHERE id = %s
             """, (
@@ -145,11 +147,12 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
                 qty_available,
                 orientation,
                 price,
+                thirty_count or None,
+                ten_count or None,
                 image_url,
                 card_id
             ))
         else:
-            # Update without changing image
             cur.execute("""
                 UPDATE sports_cards
                 SET card_name = %s,
@@ -160,7 +163,9 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
                     brand_detail = %s,
                     qty_available = %s,
                     orientation = %s,
-                    price = %s
+                    price = %s,
+                    thirty_count = %s,
+                    ten_count = %s
                 WHERE id = %s
             """, (
                 card_name,
@@ -172,6 +177,8 @@ def update_card(card_id, player, year, set_name, card_number, brand_detail, qty_
                 qty_available,
                 orientation,
                 price,
+                thirty_count or None,
+                ten_count or None,
                 card_id
             ))
 
@@ -260,7 +267,8 @@ def get_cards(year=None, set_name=None, player=None, card_number=None, sort_by="
 
         query = """
             SELECT id, card_name, player, year, set_name, card_number,
-                   brand_detail, image_url, qty_available, created_at, orientation, price
+                   brand_detail, image_url, qty_available, created_at, orientation, price,
+                   thirty_count, ten_count
             FROM sports_cards
             WHERE 1=1
         """
@@ -279,7 +287,6 @@ def get_cards(year=None, set_name=None, player=None, card_number=None, sort_by="
             query += " AND card_number = %s"
             params.append(card_number.strip())
 
-        # Sorting options
         if sort_by == "qty_desc":
             query += " ORDER BY qty_available DESC NULLS LAST, player ASC, card_number ASC"
         else:
@@ -355,7 +362,6 @@ with tab2:
         key="browse_card_number"
     )
 
-    # Sort option
     sort_option = st.selectbox(
         "Sort by",
         options=["Player (A-Z)", "Quantity (High → Low)"],
@@ -379,11 +385,14 @@ with tab2:
 
         for card in cards:
             (card_id, card_name, player, year, set_name,
-             card_number, brand_detail, image_url, qty, created_at, orientation, price) = card
+             card_number, brand_detail, image_url, qty, created_at, orientation, price,
+             thirty_count, ten_count) = card
 
             # Defaults
-            current_orientation = orientation if orientation is not None else 0
+            current_orientation = orientation if orientation is not None else 90
             current_price = float(price) if price is not None else 0.00
+            current_thirty = str(thirty_count) if thirty_count is not None else ""
+            current_ten = str(ten_count) if ten_count is not None else ""
 
             with st.container():
                 col1, col2 = st.columns([1, 2])
@@ -407,7 +416,10 @@ with tab2:
                         key=f"price_{card_id}"
                     )
 
-                    # Orientation selector with live preview
+                    # New varchar fields
+                    new_thirty = st.text_input("30 Count", value=current_thirty, key=f"thirty_{card_id}")
+                    new_ten = st.text_input("Ten Count", value=current_ten, key=f"ten_{card_id}")
+
                     new_orientation = st.selectbox(
                         "Image Orientation",
                         options=[0, 90, 180, 270],
@@ -416,7 +428,7 @@ with tab2:
                         help="0 = normal, 90 = rotate left, 180 = upside down, 270 = rotate right"
                     )
 
-                    # NEW: Image update uploader
+                    # Image update uploader
                     new_image_file = st.file_uploader(
                         "Update Image (optional – leave empty to keep current)",
                         type=['jpg', 'jpeg', 'png'],
@@ -424,15 +436,12 @@ with tab2:
                     )
 
                 with col1:
-                    # Show current image (or newly selected one for preview)
-                    display_img = None
                     if new_image_file:
                         try:
                             preview_img = Image.open(new_image_file).convert("RGB")
                             preview_img = fix_orientation(preview_img)
                             rotated = preview_img.rotate(new_orientation, expand=True)
                             st.image(rotated, width=220, caption=f"New image preview: {new_orientation}°")
-                            display_img = "new"
                         except Exception:
                             st.write("Could not preview new image")
                     elif image_url:
@@ -452,7 +461,6 @@ with tab2:
                     if st.button("💾 Update Card", key=f"update_{card_id}", type="primary", use_container_width=True):
                         new_image_url = None
 
-                        # If a new image was uploaded, process and upload it
                         if new_image_file:
                             with st.spinner("Uploading new image..."):
                                 try:
@@ -474,7 +482,9 @@ with tab2:
                             new_qty,
                             new_orientation,
                             new_price,
-                            image_url=new_image_url   # None if no new image
+                            new_thirty.strip(),
+                            new_ten.strip(),
+                            image_url=new_image_url
                         )
                         if success:
                             msg = f"✅ Card {card_id} updated successfully!"
